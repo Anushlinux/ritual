@@ -36,6 +36,8 @@ pub enum AgentOperation {
     BrowserWaitFor { selector: String },
     BrowserGoBack,
     BrowserEvaluate { expression: String },
+    // Connector/MCP operations
+    ConnectorAction { tool: String, write: bool },
 }
 
 /// Risk classification for operations.
@@ -266,6 +268,13 @@ pub fn classify_operation(op: &AgentOperation) -> RiskLevel {
         AgentOperation::BrowserWaitFor { .. } => RiskLevel::Safe,
         AgentOperation::BrowserGoBack => RiskLevel::Safe,
         AgentOperation::BrowserEvaluate { .. } => RiskLevel::Dangerous,
+        AgentOperation::ConnectorAction { write, .. } => {
+            if *write {
+                RiskLevel::Dangerous
+            } else {
+                RiskLevel::Safe
+            }
+        }
     }
 }
 
@@ -385,6 +394,10 @@ pub fn classify_tool_call(name: &str, args: &Value) -> (AgentOperation, RiskLeve
         "browser_evaluate" => AgentOperation::BrowserEvaluate {
             expression: args["expression"].as_str().unwrap_or("").to_string(),
         },
+        _ if crate::connectors::is_connector_tool(name) => AgentOperation::ConnectorAction {
+            tool: name.to_string(),
+            write: crate::connectors::connector_tool_is_write(name),
+        },
         _ => {
             // Unknown tools get Caution by default
             AgentOperation::RunCommand {
@@ -462,6 +475,13 @@ pub fn operation_human_description(op: &AgentOperation) -> String {
         AgentOperation::BrowserGoBack => "Browser: go back".to_string(),
         AgentOperation::BrowserEvaluate { expression } => {
             format!("Browser: evaluate JS: {}", expression)
+        }
+        AgentOperation::ConnectorAction { tool, write } => {
+            if *write {
+                format!("Connector write: {}", tool)
+            } else {
+                format!("Connector read: {}", tool)
+            }
         }
     }
 }

@@ -2,6 +2,7 @@ use crate::safety::classifier::{classify_tool_call, operation_human_description,
 use crate::safety::plan::PlanApprovalState;
 use crate::safety::scope::ScopeGuard;
 use crate::safety::undo::{self, UndoStack};
+use crate::connectors::{self, ConnectorRegistry};
 use crate::tools;
 use crate::types::AgentEvent;
 use crate::InterruptState;
@@ -34,6 +35,8 @@ fn current_os_label() -> &'static str {
 fn tool_category(name: &str) -> &'static str {
     if name.starts_with("browser_") {
         "browser"
+    } else if connectors::is_connector_tool(name) {
+        "connector"
     } else {
         match name {
             "read_file" | "list_dir" | "create_dir" | "move_file" | "delete_file" | "open_path" => "filesystem",
@@ -353,6 +356,11 @@ fn build_system_prompt() -> String {
          Tailor all actions and wording for {os}.\n\
          If the user greets you, mention {os} (not any other OS).\n\n\
          TOOL PRIORITY ORDER (highest to lowest):\n\n\
+         TIER 0 — CONNECTORS / MCPS (use these before browser or GUI automation):\n\
+         - Use Google and GitHub connector tools for Gmail, Calendar, repository, issue, and pull-request work.\n\
+         - Reads/searches can run directly. Writes such as sending email, creating calendar events, creating issues, or commenting require user approval.\n\
+         - Prefer connector tools over browser automation whenever a connector can complete the action.\n\
+         - Browser automation is fallback-only for web tasks without a connector tool.\n\n\
          TIER 1 — FILE & SYSTEM TOOLS (use these first, they are fast and reliable):\n\
          - shell_exec(command): Run shell commands. Best for opening apps, running scripts, file ops, querying system.\n\
          - open_path(path): Open a folder/file in the native file manager.\n\
@@ -365,7 +373,7 @@ fn build_system_prompt() -> String {
          TIER 2 — KEYBOARD & HOTKEYS (use when shell isn't suitable, e.g. interacting with focused windows):\n\
          - keyboard_hotkey(keys): Press a key combination (e.g. [\"ctrl\", \"c\"], [\"win\", \"i\"], [\"alt\", \"tab\"]).\n\
          - keyboard_type(text): Type a text string.\n\n\
-         TIER 2.5 — BROWSER AUTOMATION (for web tasks, research, form filling):\n\
+         TIER 2.5 — BROWSER AUTOMATION (fallback only for web tasks with no connector):\n\
          - browser_navigate(url): Open a URL in Chrome. Connects automatically.\n\
          - browser_get_page_state(): Get interactive elements (numbered) + annotated screenshot. ALWAYS call this first on a new page.\n\
          - browser_click(selector): Click by ELEMENT INDEX NUMBER (preferred, e.g. \"7\"), accessible name, or CSS selector.\n\
@@ -378,11 +386,12 @@ fn build_system_prompt() -> String {
          - browser_evaluate(expression): Run JavaScript on the page (advanced).\n\
          APPROACH: Navigate first, then call browser_get_page_state. The screenshot will have orange numbered labels on interactive elements. Use those numbers with browser_click (e.g. browser_click(selector=\"7\")) — this is the MOST RELIABLE method. You can also use element names from the elements list.\n\
          CRITICAL BROWSER RULES:\n\
-         - For ANY web or browser task, call browser_navigate as the VERY FIRST tool call. No other tool before it.\n\
+         - For web tasks with a matching connector, DO NOT use browser tools. Use the connector tool.\n\
+         - For browser fallback tasks, call browser_navigate as the VERY FIRST browser tool call.\n\
          - NEVER use shell_exec to open, launch, restart, or kill Chrome. Not 'open -a Google Chrome', not pkill, not killall. Nothing.\n\
          - Chrome lifecycle (launch, restart, session restore) is handled AUTOMATICALLY by the browser tools. You do nothing.\n\
          - If a browser tool fails after 2 retries, report the error text to the user verbatim and stop. Do not try shell workarounds.\n\
-         - The 'PRIORITIZE TERMINAL' rule does NOT apply to browser tasks. For web tasks, use browser_* tools only.\n\n\
+         - The 'PRIORITIZE TERMINAL' rule does NOT apply to browser tasks. For browser fallback tasks, use browser_* tools only.\n\n\
          TIER 3 — VISION / MOUSE CONTROL (for GUI interactions that require clicking on screen elements):\n\
          - screenshot(): Capture the screen as an image for visual analysis. Returns a base64 PNG image.\n\
          - mouse_move(x, y): Move the mouse cursor to absolute screen coordinates. ALWAYS call this before mouse_click.\n\
@@ -403,11 +412,12 @@ fn build_system_prompt() -> String {
          DO NOT use screenshot() just to confirm an action worked — trust the tool result output instead.\n\n\
          APPROACH FOR EVERY TASK:\n\
          1. If the request is unclear, ask ONE concise clarification question before acting.\n\
-         2. PRIORITIZE TERMINAL OVER GUI: For non-browser tasks, ALWAYS use shell_exec first. Never use UI settings apps or simulated GUI inputs if a command-line equivalent exists. Exception: for web/browser tasks, use browser_* tools exclusively — never shell_exec to manage Chrome processes.\n\
-         3. Only resort to GUI interactions (screenshot, keyboard_type) if the task explicitly asks to interact with a visual element or if terminal commands are completely impossible.\n\
-         4. Execute step-by-step and summarize exactly what changed.\n\
-         7. Never claim actions for a different operating system.\n\
-         8. Do not guess unknown app names/paths — ask before acting.\n\n\
+         2. For Gmail, Calendar, GitHub issues/PRs/repos, use connector tools before terminal, browser, or GUI automation.\n\
+         3. PRIORITIZE TERMINAL OVER GUI for local/system tasks. Never use UI settings apps or simulated GUI inputs if a command-line equivalent exists. Exception: for web/browser fallback tasks, use browser_* tools exclusively — never shell_exec to manage Chrome processes.\n\
+         4. Only resort to GUI interactions (screenshot, keyboard_type) if the task explicitly asks to interact with a visual element or if terminal/connector/browser methods are completely impossible.\n\
+         5. Execute step-by-step and summarize exactly what changed.\n\
+         6. Never claim actions for a different operating system.\n\
+         7. Do not guess unknown app names/paths — ask before acting.\n\n\
          QUICK EXAMPLES:\n\
          - 'Open Calculator' → shell_exec('calc') on Windows, or shell_exec('open -a Calculator') on macOS.\n\
          - 'Search for a file' → shell_exec('dir /s filename' on Windows, 'find ~ -name filename' on macOS/Linux).\n\
@@ -424,7 +434,7 @@ fn build_system_prompt() -> String {
 }
 
 
-fn build_tools_declaration() -> Value {
+fn build_tools_declaration(connector_tools: Vec<Value>) -> Value {
     let mut function_declarations = vec![
         // ─── Computer Use Tools (highest priority) ───
         json!({
@@ -709,6 +719,8 @@ fn build_tools_declaration() -> Value {
         }
     }));
 
+    function_declarations.extend(connector_tools);
+
     json!([{ "functionDeclarations": function_declarations }])
 }
 
@@ -721,6 +733,7 @@ pub async fn run_agent(
     undo_stack: State<'_, UndoStack>,
     plan_state: State<'_, PlanApprovalState>,
     browser_state: State<'_, crate::browser::BrowserState>,
+    connector_registry: State<'_, ConnectorRegistry>,
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
 
@@ -740,7 +753,7 @@ pub async fn run_agent(
         "parts": [{ "text": system_prompt }]
     });
 
-    let tools = build_tools_declaration();
+    let tools = build_tools_declaration(connectors::connector_tools_as_gemini_declarations());
     
     let mut contents = history;
 
@@ -988,7 +1001,10 @@ pub async fn run_agent(
                     }
 
                     // ── Safety: classify the tool call ──
-                    let (operation, risk) = classify_tool_call(name, args);
+                    let (operation, mut risk) = classify_tool_call(name, args);
+                    if connectors::connector_tool_is_write(name) {
+                        risk = RiskLevel::Dangerous;
+                    }
                     // Screenshot approval is temporarily disabled.
                     // if name == "screenshot" {
                     //     risk = RiskLevel::Dangerous;
@@ -1178,7 +1194,9 @@ pub async fn run_agent(
                     let snapshot = undo::snapshot_before_operation(&operation).ok();
 
                     // Execute the tool (no artificial delays — runs at full OS speed)
-                    let result = if name.starts_with("browser_") {
+                    let result = if connectors::is_connector_tool(name) {
+                        connector_registry.dispatch_tool(name, args).await
+                    } else if name.starts_with("browser_") {
                         crate::browser::actions::dispatch_browser_tool(name, args, &browser_state).await
                     } else if name == "computer_use" {
                         let task = args["task"].as_str().unwrap_or("");

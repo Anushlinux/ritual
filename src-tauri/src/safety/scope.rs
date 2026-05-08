@@ -202,6 +202,9 @@ impl ScopeGuard {
             | AgentOperation::BrowserWaitFor { .. }
             | AgentOperation::BrowserGoBack
             | AgentOperation::BrowserEvaluate { .. } => ScopeViolation::None,
+
+            // Connectors are governed by connector-specific auth plus write previews.
+            AgentOperation::ConnectorAction { .. } => ScopeViolation::None,
         }
     }
 

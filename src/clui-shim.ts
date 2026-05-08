@@ -326,12 +326,18 @@ async function ensureListener() {
       };
     });
 
+    const connectorTools = await (window as any).clui.listConnectorTools();
+    const connectors = await (window as any).clui.listConnectors();
+
     eventListeners.forEach(fn => fn(tabId, {
       type: 'session_init',
       sessionId,
-      tools: [],
+      tools: connectorTools.map((tool: any) => tool.name),
       model: 'gemini-3.1-pro-preview',
-      mcpServers: [],
+      mcpServers: connectors.map((connector: any) => ({
+        name: connector.name,
+        status: connector.status,
+      })),
       skills: [],
       version: '1.0',
       isWarmup: false
@@ -580,6 +586,43 @@ async function ensureListener() {
         transcript: '',
         error: String(e),
       };
+    }
+  },
+
+  // ─── Connectors / MCP ───
+  listConnectors: async () => {
+    try {
+      return await invoke<any[]>('list_connectors_command');
+    } catch (e) {
+      console.error(e);
+      return [];
+    }
+  },
+  connectConnector: async (provider: string) => {
+    try {
+      return await invoke<any>('connect_connector_command', { provider });
+    } catch (e) {
+      return {
+        provider,
+        status: 'error',
+        auth_url: null,
+        message: String(e),
+      };
+    }
+  },
+  disconnectConnector: async (provider: string) => {
+    try {
+      await invoke('disconnect_connector_command', { provider });
+    } catch (e) {
+      console.error(e);
+    }
+  },
+  listConnectorTools: async () => {
+    try {
+      return await invoke<any[]>('list_connector_tools_command');
+    } catch (e) {
+      console.error(e);
+      return [];
     }
   },
 

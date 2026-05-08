@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { TabStatus, NormalizedEvent, EnrichedError, Message, TabState, Attachment, CatalogPlugin, PluginStatus, ExecutionPlan } from '../types'
+import type { TabStatus, NormalizedEvent, EnrichedError, Message, TabState, Attachment, CatalogPlugin, PluginStatus, ExecutionPlan, ConnectorInfo, ConnectorTool, ConnectorProvider } from '../types'
 import { useThemeStore } from '../theme'
 // Notification audio disabled (no audio file bundled in this Tauri build)
 const notificationSrc = ''
@@ -75,6 +75,13 @@ interface State {
   marketplaceSearch: string
   marketplaceFilter: string
 
+  // Connector state
+  connectorsOpen: boolean
+  connectors: ConnectorInfo[]
+  connectorTools: ConnectorTool[]
+  connectorsLoading: boolean
+  connectorsError: string | null
+
   // Actions
   initStaticInfo: () => Promise<void>
   setPreferredModel: (model: string | null) => void
@@ -86,6 +93,11 @@ interface State {
   toggleExpanded: () => void
   toggleMarketplace: () => void
   closeMarketplace: () => void
+  toggleConnectors: () => void
+  closeConnectors: () => void
+  loadConnectors: () => Promise<void>
+  connectConnector: (provider: ConnectorProvider) => Promise<void>
+  disconnectConnector: (provider: ConnectorProvider) => Promise<void>
   loadMarketplace: (forceRefresh?: boolean) => Promise<void>
   setMarketplaceSearch: (query: string) => void
   setMarketplaceFilter: (filter: string) => void
@@ -175,6 +187,13 @@ export const useSessionStore = create<State>((set, get) => ({
   marketplaceSearch: '',
   marketplaceFilter: 'All',
 
+  // Connectors
+  connectorsOpen: false,
+  connectors: [],
+  connectorTools: [],
+  connectorsLoading: false,
+  connectorsError: null,
+
   initStaticInfo: async () => {
     try {
       const result = await window.clui.start()
@@ -232,6 +251,7 @@ export const useSessionStore = create<State>((set, get) => ({
       set((prev) => ({
         isExpanded: willExpand,
         marketplaceOpen: false,
+        connectorsOpen: false,
         // Expanding = reading: clear unread flag
         tabs: willExpand
           ? prev.tabs.map((t) => t.id === tabId ? { ...t, hasUnread: false } : t)
@@ -242,6 +262,7 @@ export const useSessionStore = create<State>((set, get) => ({
       set((prev) => ({
         activeTabId: tabId,
         marketplaceOpen: false,
+        connectorsOpen: false,
         tabs: prev.tabs.map((t) =>
           t.id === tabId ? { ...t, hasUnread: false } : t
         ),
@@ -255,6 +276,7 @@ export const useSessionStore = create<State>((set, get) => ({
     set((s) => ({
       isExpanded: willExpand,
       marketplaceOpen: false,
+      connectorsOpen: false,
       // Expanding = reading: clear unread flag for the active tab
       tabs: willExpand
         ? s.tabs.map((t) => t.id === activeTabId ? { ...t, hasUnread: false } : t)
@@ -267,13 +289,72 @@ export const useSessionStore = create<State>((set, get) => ({
     if (s.marketplaceOpen) {
       set({ marketplaceOpen: false })
     } else {
-      set({ isExpanded: false, marketplaceOpen: true })
+      set({ isExpanded: false, marketplaceOpen: true, connectorsOpen: false })
       get().loadMarketplace()
     }
   },
 
   closeMarketplace: () => {
     set({ marketplaceOpen: false })
+  },
+
+  toggleConnectors: () => {
+    const s = get()
+    if (s.connectorsOpen) {
+      set({ connectorsOpen: false })
+    } else {
+      set({ isExpanded: false, connectorsOpen: true, marketplaceOpen: false })
+      get().loadConnectors()
+    }
+  },
+
+  closeConnectors: () => {
+    set({ connectorsOpen: false })
+  },
+
+  loadConnectors: async () => {
+    set({ connectorsLoading: true, connectorsError: null })
+    try {
+      const [connectors, connectorTools] = await Promise.all([
+        window.clui.listConnectors(),
+        window.clui.listConnectorTools(),
+      ])
+      set({ connectors, connectorTools, connectorsLoading: false })
+    } catch (err: unknown) {
+      set({
+        connectorsLoading: false,
+        connectorsError: err instanceof Error ? err.message : String(err),
+      })
+    }
+  },
+
+  connectConnector: async (provider) => {
+    set({ connectorsLoading: true, connectorsError: null })
+    try {
+      const result = await window.clui.connectConnector(provider)
+      if (result.auth_url && result.status !== 'connected') {
+        await window.clui.openExternal(result.auth_url)
+      }
+      await get().loadConnectors()
+    } catch (err: unknown) {
+      set({
+        connectorsLoading: false,
+        connectorsError: err instanceof Error ? err.message : String(err),
+      })
+    }
+  },
+
+  disconnectConnector: async (provider) => {
+    set({ connectorsLoading: true, connectorsError: null })
+    try {
+      await window.clui.disconnectConnector(provider)
+      await get().loadConnectors()
+    } catch (err: unknown) {
+      set({
+        connectorsLoading: false,
+        connectorsError: err instanceof Error ? err.message : String(err),
+      })
+    }
   },
 
   loadMarketplace: async (forceRefresh) => {
@@ -348,7 +429,7 @@ export const useSessionStore = create<State>((set, get) => ({
   },
 
   buildYourOwn: () => {
-    set({ marketplaceOpen: false, isExpanded: true })
+    set({ marketplaceOpen: false, connectorsOpen: false, isExpanded: true })
     // Small delay to let the UI transition
     setTimeout(() => {
       get().sendMessage('Help me create a new Claude Code skill')

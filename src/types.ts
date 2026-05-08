@@ -198,6 +198,34 @@ export interface RunResult {
   sessionId: string
 }
 
+export type ConnectorProvider = 'google' | 'github'
+export type ConnectorStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+
+export interface ConnectorInfo {
+  provider: ConnectorProvider
+  name: string
+  status: ConnectorStatus
+  scopes: string[]
+  auth_url?: string | null
+  message?: string | null
+}
+
+export interface ConnectorTool {
+  id: string
+  name: string
+  description: string
+  provider: ConnectorProvider
+  input_schema: Record<string, unknown>
+  risk: 'safe' | 'caution' | 'dangerous'
+}
+
+export interface ConnectConnectorResult {
+  provider: ConnectorProvider
+  status: ConnectorStatus
+  auth_url?: string | null
+  message: string
+}
+
 // ─── Canonical Events (normalized from raw stream) ───
 
 export type NormalizedEvent =
@@ -228,6 +256,7 @@ export type NormalizedEvent =
   | { type: 'rate_limit'; status: string; resetsAt: number; rateLimitType: string }
   | { type: 'usage'; usage: UsageData }
   | { type: 'permission_request'; questionId: string; toolName: string; toolDescription?: string; toolInput?: Record<string, unknown>; options: Array<{ id: string; label: string; kind?: string }> }
+  | { type: 'connector_status_changed'; connector: ConnectorInfo }
 
 // ─── Run Options ───
 

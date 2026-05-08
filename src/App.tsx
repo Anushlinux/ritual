@@ -6,6 +6,7 @@ import { ConversationView } from './components/ConversationView'
 import { InputBar } from './components/InputBar'
 import { StatusBar } from './components/StatusBar'
 import { MarketplacePanel } from './components/MarketplacePanel'
+import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { PopoverLayerProvider } from './components/PopoverLayer'
 import { useClaudeEvents } from './hooks/useClaudeEvents'
 import { useHealthReconciliation } from './hooks/useHealthReconciliation'
@@ -71,6 +72,7 @@ export default function App() {
   // Resize the native window to exactly fit the visible UI content.
   const isExpanded = useSessionStore((s) => s.isExpanded)
   const marketplaceOpen = useSessionStore((s) => s.marketplaceOpen)
+  const connectorsOpen = useSessionStore((s) => s.connectorsOpen)
   const [isFilePickerCompact, setIsFilePickerCompact] = useState(false)
   const [isFilePickerWindowCompact, setIsFilePickerWindowCompact] = useState(false)
   const pendingPlan = useSessionStore((s) => s.pendingPlan)
@@ -84,17 +86,17 @@ export default function App() {
     }
     // Collapsed: just tab strip + input pill ≈ 148px
     // Expanded: tab strip + conversation + input ≈ 700px
-    // Marketplace open: add marketplace panel ≈ 820px
+    // Marketplace/connectors open: add panel space.
     let height = 148
-    if (isExpanded && marketplaceOpen) {
+    if (isExpanded && (marketplaceOpen || connectorsOpen)) {
       height = 820
     } else if (isExpanded) {
       height = 700
-    } else if (marketplaceOpen) {
+    } else if (marketplaceOpen || connectorsOpen) {
       height = 720
     }
     window.clui.resizeWindow(1200, height)
-  }, [isExpanded, marketplaceOpen, isFilePickerWindowCompact])
+  }, [isExpanded, marketplaceOpen, connectorsOpen, isFilePickerWindowCompact])
 
   // NOTE: The OS-level click-through (setIgnoreMouseEvents) has been removed.
   // With the window dynamically sized to fit the UI content, there is no large
@@ -233,6 +235,39 @@ export default function App() {
                 </motion.div>
               </div>
             )}
+            {connectorsOpen && !isFilePickerCompact && (
+              <div
+                data-clui-ui
+                style={{
+                  width: 860,
+                  maxWidth: 860,
+                  marginLeft: '50%',
+                  transform: 'translateX(-50%)',
+                  marginBottom: 14,
+                  position: 'relative',
+                  zIndex: 30,
+                }}
+              >
+                <motion.div
+                  initial={{ opacity: 0, y: 14, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.985 }}
+                  transition={TRANSITION}
+                >
+                  <div
+                    data-clui-ui
+                    className="glass-surface overflow-hidden no-drag"
+                    style={{
+                      borderRadius: 24,
+                      maxHeight: 560,
+                      overflowY: 'auto',
+                    }}
+                  >
+                    <ConnectorsPanel />
+                  </div>
+                </motion.div>
+              </div>
+            )}
           </AnimatePresence>
 
           {/*
@@ -313,11 +348,11 @@ export default function App() {
                 >
                   <Camera size={20} />
                 </button>
-                {/* btn-3: Skills */}
+                {/* btn-3: Connectors */}
                 <button
                   className="stack-btn stack-btn-3 glass-surface"
-                  title="Skills & Plugins"
-                  onClick={() => useSessionStore.getState().toggleMarketplace()}
+                  title="Connectors"
+                  onClick={() => useSessionStore.getState().toggleConnectors()}
                   disabled={isRunning}
                 >
                   <HeadCircuit size={20} />

@@ -250,6 +250,10 @@ pub fn snapshot_before_operation(op: &AgentOperation) -> Result<OperationSnapsho
         | AgentOperation::BrowserEvaluate { .. } => Ok(OperationSnapshot::NotUndoable {
             reason: "Browser action (transient)".to_string(),
         }),
+
+        AgentOperation::ConnectorAction { .. } => Ok(OperationSnapshot::NotUndoable {
+            reason: "Connector action is not locally undoable".to_string(),
+        }),
     }
 }
 

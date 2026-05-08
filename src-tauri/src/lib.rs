@@ -1,5 +1,6 @@
 mod agent;
 pub mod browser;
+mod connectors;
 mod safety;
 mod tools;
 mod types;
@@ -11,6 +12,7 @@ use tauri::State;
 use safety::scope::{ScopeConfig, ScopeGuard};
 use safety::undo::UndoStack;
 use safety::plan::PlanApprovalState;
+use connectors::ConnectorRegistry;
 
 #[derive(serde::Deserialize)]
 struct GcpServiceAccountKey {
@@ -224,9 +226,50 @@ async fn run_agent_command(
     undo_stack: State<'_, UndoStack>,
     plan_state: State<'_, PlanApprovalState>,
     browser_state: State<'_, browser::BrowserState>,
+    connector_registry: State<'_, ConnectorRegistry>,
 ) -> Result<(), String> {
     state.0.store(false, Ordering::SeqCst);
-    agent::run_agent(prompt, history, window, state, scope_guard, undo_stack, plan_state, browser_state).await
+    agent::run_agent(
+        prompt,
+        history,
+        window,
+        state,
+        scope_guard,
+        undo_stack,
+        plan_state,
+        browser_state,
+        connector_registry,
+    ).await
+}
+
+#[tauri::command]
+async fn list_connectors_command(
+    connector_registry: State<'_, ConnectorRegistry>,
+) -> Result<Vec<connectors::ConnectorInfo>, String> {
+    Ok(connector_registry.list_connectors())
+}
+
+#[tauri::command]
+async fn connect_connector_command(
+    provider: String,
+    connector_registry: State<'_, ConnectorRegistry>,
+) -> Result<connectors::ConnectConnectorResult, String> {
+    Ok(connector_registry.connect(&provider))
+}
+
+#[tauri::command]
+async fn disconnect_connector_command(
+    provider: String,
+    connector_registry: State<'_, ConnectorRegistry>,
+) -> Result<(), String> {
+    connector_registry.disconnect(&provider)
+}
+
+#[tauri::command]
+async fn list_connector_tools_command(
+    connector_registry: State<'_, ConnectorRegistry>,
+) -> Result<Vec<connectors::ConnectorTool>, String> {
+    Ok(connector_registry.list_tools())
 }
 
 // ─── Safety commands ───
@@ -373,6 +416,7 @@ pub fn run() {
         .manage(UndoStack::new(50))
         .manage(PlanApprovalState::new())
         .manage(browser::new_state())
+        .manage(ConnectorRegistry::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -405,6 +449,10 @@ pub fn run() {
                 attach_files_command,
                 take_screenshot_command,
                 transcribe_audio_command,
+                list_connectors_command,
+                connect_connector_command,
+                disconnect_connector_command,
+                list_connector_tools_command,
                 open_external_command,
                 open_in_terminal_command,
                 get_scope_config,
