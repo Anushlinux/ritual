@@ -121,12 +121,12 @@ function setInstalledPlugins(list: string[]) {
   localStorage.setItem(INSTALLED_PLUGINS_KEY, JSON.stringify(Array.from(new Set(list))));
 }
 
-function formatHistoryForOpenAI(messages: SessionMessage[]): any[] {
+function formatHistoryForClaude(messages: SessionMessage[]): any[] {
   return messages.map((m) => {
     if (m.role === 'user') {
-      return { role: 'user', content: [{ type: 'input_text', text: m.content }] };
+      return { role: 'user', content: [{ type: 'text', text: m.content }] };
     } else if (m.role === 'assistant') {
-      return { role: 'assistant', content: [{ type: 'output_text', text: m.content }] };
+      return { role: 'assistant', content: [{ type: 'text', text: m.content }] };
     }
     return null;
   }).filter(Boolean);
@@ -328,12 +328,13 @@ async function ensureListener() {
 
     const connectorTools = await (window as any).clui.listConnectorTools();
     const connectors = await (window as any).clui.listConnectors();
+    const runtimeConfig = await (window as any).clui.getRuntimeConfigStatus();
 
     eventListeners.forEach(fn => fn(tabId, {
       type: 'session_init',
       sessionId,
       tools: connectorTools.map((tool: any) => tool.name),
-      model: 'OpenAI',
+      model: opts.model || runtimeConfig.model || 'Claude',
       mcpServers: connectors.map((connector: any) => ({
         name: connector.name,
         status: connector.status,
@@ -347,11 +348,12 @@ async function ensureListener() {
     try {
       const all = loadSessions();
       const session = all[sessionId];
-      const history = session ? formatHistoryForOpenAI(session.messages) : [];
+      const history = session ? formatHistoryForClaude(session.messages) : [];
       
       await invoke('run_agent_command', { 
         prompt: opts.prompt, 
-        history
+        history,
+        model: opts.model || null,
       });
     } catch (e) {
       errorListeners.forEach(fn => fn(tabId, {
@@ -581,7 +583,7 @@ async function ensureListener() {
       return await invoke<any>('get_runtime_config_status_command');
     } catch (e) {
       return {
-        provider: 'OpenAI',
+        provider: 'Claude',
         model: 'unknown',
         key_source: 'error',
         key_fingerprint: String(e),

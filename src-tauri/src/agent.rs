@@ -1,9 +1,9 @@
+use crate::connectors::{self, ConnectorRegistry};
+use crate::runtime_config::{self, anthropic_model, anthropic_version, read_runtime_secret};
 use crate::safety::classifier::{classify_tool_call, operation_human_description, RiskLevel};
 use crate::safety::plan::PlanApprovalState;
 use crate::safety::scope::ScopeGuard;
 use crate::safety::undo::{self, UndoStack};
-use crate::connectors::{self, ConnectorRegistry};
-use crate::runtime_config::{self, openai_model, read_runtime_env, read_runtime_secret};
 use crate::tools;
 use crate::types::AgentEvent;
 use crate::InterruptState;
@@ -40,7 +40,9 @@ fn tool_category(name: &str) -> &'static str {
         "connector"
     } else {
         match name {
-            "read_file" | "list_dir" | "create_dir" | "move_file" | "delete_file" | "open_path" => "filesystem",
+            "read_file" | "list_dir" | "create_dir" | "move_file" | "delete_file" | "open_path" => {
+                "filesystem"
+            }
             "shell_exec" => "shell",
             "keyboard_type" | "keyboard_hotkey" => "keyboard",
             "screenshot" | "computer_use" => "vision",
@@ -88,9 +90,11 @@ fn parse_key_combo(combo: &str) -> Vec<String> {
         .collect()
 }
 
-async fn request_openrouter_action(
+async fn request_claude_action(
     client: &reqwest::Client,
     api_key: &str,
+    api_version: &str,
+    model: &str,
     task: &str,
     screenshot_b64: &str,
     width: u32,
@@ -117,20 +121,20 @@ async fn request_openrouter_action(
     );
 
     let payload = json!({
-        "model": "qwen/qwen2.5-vl-72b-instruct",
+        "model": model,
+        "max_tokens": 1024,
+        "system": "Return strictly valid JSON for one desktop action. No prose. No markdown fences.",
         "messages": [
-            {
-                "role": "system",
-                "content": "Return strictly valid JSON for one action. No prose. No markdown fences."
-            },
             {
                 "role": "user",
                 "content": [
                     { "type": "text", "text": instruction_text },
                     {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": format!("data:image/png;base64,{}", screenshot_b64)
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": screenshot_b64
                         }
                     }
                 ]
@@ -139,35 +143,38 @@ async fn request_openrouter_action(
     });
 
     let response = client
-        .post("https://openrouter.ai/api/v1/chat/completions")
-        .bearer_auth(api_key)
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", api_version)
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("OpenRouter request failed: {}", e))?;
+        .map_err(|e| format!("Claude API request failed: {}", e))?;
 
     let status = response.status();
     let data: Value = response
         .json()
         .await
-        .map_err(|e| format!("Invalid OpenRouter response JSON: {}", e))?;
+        .map_err(|e| format!("Invalid Claude API response JSON: {}", e))?;
 
     if !status.is_success() {
         let msg = data
             .get("error")
             .and_then(|v| v.get("message"))
             .and_then(|v| v.as_str())
-            .unwrap_or("OpenRouter API returned error")
+            .unwrap_or("Claude API returned error")
             .to_string();
-        return Err(format!("OpenRouter error ({}): {}", status, msg));
+        return Err(format!("Claude API error ({}): {}", status, msg));
     }
 
-    let raw_content = data["choices"][0]["message"]["content"]
-        .as_str()
-        .ok_or_else(|| "OpenRouter response missing choices[0].message.content".to_string())?;
+    let content = data["content"].as_array().cloned().unwrap_or_default();
+    let raw_content = message_text_from_claude_content(&content);
+    if raw_content.trim().is_empty() {
+        return Err("Claude API response missing text content for computer_use action".to_string());
+    }
 
-    let cleaned = strip_markdown_fences(raw_content);
+    let cleaned = strip_markdown_fences(&raw_content);
     serde_json::from_str::<ComputerUseAction>(&cleaned)
         .map_err(|e| format!("Failed to parse action JSON from model output: {}", e))
 }
@@ -178,8 +185,12 @@ async fn run_computer_use_loop(
     window: &tauri::Window,
     interrupt_state: &State<'_, InterruptState>,
 ) -> Result<String, String> {
-    let api_key = read_runtime_env("OPENROUTER_KEY")
-        .ok_or_else(|| "OPENROUTER_KEY was not found in runtime env or .env".to_string())?;
+    let api_secret = read_runtime_secret("ANTHROPIC_API_KEY").ok_or_else(|| {
+        "ANTHROPIC_API_KEY is missing. Add it to src-tauri/.env, then restart the app.".to_string()
+    })?;
+    let api_key = api_secret.value;
+    let api_version = anthropic_version();
+    let model = anthropic_model();
 
     let client = reqwest::Client::new();
     let mut history: Vec<Value> = Vec::new();
@@ -196,9 +207,11 @@ async fn run_computer_use_loop(
         window.show().ok();
         let frame = frame?;
 
-        let action = request_openrouter_action(
+        let action = request_claude_action(
             &client,
             &api_key,
+            &api_version,
+            &model,
             task,
             &frame.base64_png,
             frame.width,
@@ -210,20 +223,32 @@ async fn run_computer_use_loop(
         let normalized = action.action.trim().to_lowercase();
         let exec_result = match normalized.as_str() {
             "click" => {
-                let x = action.x.ok_or_else(|| "click action missing x".to_string())?;
-                let y = action.y.ok_or_else(|| "click action missing y".to_string())?;
+                let x = action
+                    .x
+                    .ok_or_else(|| "click action missing x".to_string())?;
+                let y = action
+                    .y
+                    .ok_or_else(|| "click action missing y".to_string())?;
                 tools::mouse_move_tool(x, y)?;
                 tools::mouse_click_tool("left", "single")?
             }
             "double_click" => {
-                let x = action.x.ok_or_else(|| "double_click action missing x".to_string())?;
-                let y = action.y.ok_or_else(|| "double_click action missing y".to_string())?;
+                let x = action
+                    .x
+                    .ok_or_else(|| "double_click action missing x".to_string())?;
+                let y = action
+                    .y
+                    .ok_or_else(|| "double_click action missing y".to_string())?;
                 tools::mouse_move_tool(x, y)?;
                 tools::mouse_click_tool("left", "double")?
             }
             "right_click" => {
-                let x = action.x.ok_or_else(|| "right_click action missing x".to_string())?;
-                let y = action.y.ok_or_else(|| "right_click action missing y".to_string())?;
+                let x = action
+                    .x
+                    .ok_or_else(|| "right_click action missing x".to_string())?;
+                let y = action
+                    .y
+                    .ok_or_else(|| "right_click action missing y".to_string())?;
                 tools::mouse_move_tool(x, y)?;
                 tools::mouse_click_tool("right", "single")?
             }
@@ -253,7 +278,9 @@ async fn run_computer_use_loop(
                 tools::keyboard_hotkey_tool(&keys)?
             }
             "done" => {
-                let reason = action.reason.unwrap_or_else(|| "Task completed".to_string());
+                let reason = action
+                    .reason
+                    .unwrap_or_else(|| "Task completed".to_string());
                 history.push(json!({
                     "step": step,
                     "action": "done",
@@ -268,7 +295,9 @@ async fn run_computer_use_loop(
                 .to_string());
             }
             "fail" => {
-                let reason = action.reason.unwrap_or_else(|| "Model reported fail".to_string());
+                let reason = action
+                    .reason
+                    .unwrap_or_else(|| "Model reported fail".to_string());
                 history.push(json!({
                     "step": step,
                     "action": "fail",
@@ -405,7 +434,6 @@ fn build_system_prompt() -> String {
          Dangerous hotkeys (Ctrl+Alt+Del, Alt+F4) require explicit user approval."
     )
 }
-
 
 fn build_tools_declaration(connector_tools: Vec<Value>) -> Value {
     let mut function_declarations = vec![
@@ -697,24 +725,26 @@ fn build_tools_declaration(connector_tools: Vec<Value>) -> Value {
     json!([{ "functionDeclarations": function_declarations }])
 }
 
-fn normalize_schema_for_openai(value: Value) -> Value {
+fn normalize_schema_for_claude(value: Value) -> Value {
     match value {
         Value::Object(mut map) => {
             if let Some(Value::String(kind)) = map.get_mut("type") {
                 *kind = kind.to_lowercase();
             }
             for item in map.values_mut() {
-                let normalized = normalize_schema_for_openai(item.take());
+                let normalized = normalize_schema_for_claude(item.take());
                 *item = normalized;
             }
             Value::Object(map)
         }
-        Value::Array(items) => Value::Array(items.into_iter().map(normalize_schema_for_openai).collect()),
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(normalize_schema_for_claude).collect())
+        }
         other => other,
     }
 }
 
-fn build_openai_tools(connector_tools: Vec<Value>) -> Vec<Value> {
+fn build_claude_tools(connector_tools: Vec<Value>) -> Vec<Value> {
     let declarations = build_tools_declaration(connector_tools);
     declarations
         .get(0)
@@ -725,10 +755,9 @@ fn build_openai_tools(connector_tools: Vec<Value>) -> Vec<Value> {
                 .iter()
                 .map(|tool| {
                     json!({
-                        "type": "function",
                         "name": tool["name"].as_str().unwrap_or_default(),
                         "description": tool["description"].as_str().unwrap_or_default(),
-                        "parameters": normalize_schema_for_openai(tool["parameters"].clone())
+                        "input_schema": normalize_schema_for_claude(tool["parameters"].clone())
                     })
                 })
                 .collect()
@@ -736,19 +765,12 @@ fn build_openai_tools(connector_tools: Vec<Value>) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn message_text_from_openai_output(output: &[Value]) -> String {
-    output
+fn message_text_from_claude_content(content: &[Value]) -> String {
+    content
         .iter()
-        .filter(|item| item["type"].as_str() == Some("message"))
-        .flat_map(|item| {
-            item["content"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-        })
-        .filter_map(|content| {
-            if content["type"].as_str() == Some("output_text") {
-                content["text"].as_str().map(|s| s.to_string())
+        .filter_map(|block| {
+            if block["type"].as_str() == Some("text") {
+                block["text"].as_str().map(|s| s.to_string())
             } else {
                 None
             }
@@ -757,16 +779,16 @@ fn message_text_from_openai_output(output: &[Value]) -> String {
         .join("\n")
 }
 
-fn openai_function_calls(output: &[Value]) -> Vec<(String, String, Value)> {
-    output
+fn claude_tool_calls(content: &[Value]) -> Vec<(String, String, Value)> {
+    content
         .iter()
-        .filter(|item| item["type"].as_str() == Some("function_call"))
+        .filter(|item| item["type"].as_str() == Some("tool_use"))
         .map(|item| {
-            let call_id = item["call_id"].as_str().unwrap_or_default().to_string();
+            let call_id = item["id"].as_str().unwrap_or_default().to_string();
             let name = item["name"].as_str().unwrap_or_default().to_string();
-            let args = item["arguments"]
-                .as_str()
-                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            let args = item["input"]
+                .as_object()
+                .map(|_| item["input"].clone())
                 .unwrap_or_else(|| json!({}));
             (call_id, name, args)
         })
@@ -774,17 +796,62 @@ fn openai_function_calls(output: &[Value]) -> Vec<(String, String, Value)> {
         .collect()
 }
 
-fn openai_tool_output(call_id: &str, output: impl Into<String>) -> Value {
+fn claude_tool_result(call_id: &str, output: impl Into<String>) -> Value {
+    claude_tool_result_block(call_id, json!(output.into()), false)
+}
+
+fn claude_tool_error(call_id: &str, output: impl Into<String>) -> Value {
+    claude_tool_result_block(call_id, json!(output.into()), true)
+}
+
+fn claude_tool_result_block(call_id: &str, content: Value, is_error: bool) -> Value {
+    let mut block = json!({
+        "type": "tool_result",
+        "tool_use_id": call_id,
+        "content": content
+    });
+    if is_error {
+        block["is_error"] = json!(true);
+    }
+    block
+}
+
+fn claude_image_block(b64_data: &str) -> Value {
     json!({
-        "type": "function_call_output",
-        "call_id": call_id,
-        "output": output.into()
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": b64_data
+        }
     })
+}
+
+async fn post_claude_message(
+    client: &reqwest::Client,
+    api_key: &str,
+    api_version: &str,
+    body: &Value,
+) -> Result<(reqwest::StatusCode, Value), String> {
+    let response = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", api_version)
+        .header("Content-Type", "application/json")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    let data: Value = response.json().await.map_err(|e| e.to_string())?;
+    Ok((status, data))
 }
 
 pub async fn run_agent(
     prompt: String,
     history: Vec<Value>,
+    model_override: Option<String>,
     window: tauri::Window,
     interrupt_state: State<'_, InterruptState>,
     scope_guard: State<'_, ScopeGuard>,
@@ -795,16 +862,21 @@ pub async fn run_agent(
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
 
-    let api_secret = read_runtime_secret("OPENAI_API_KEY")
-        .ok_or_else(|| "OPENAI_API_KEY is missing. Add it to src-tauri/.env, then restart the app.".to_string())?;
+    let api_secret = read_runtime_secret("ANTHROPIC_API_KEY").ok_or_else(|| {
+        "ANTHROPIC_API_KEY is missing. Add it to src-tauri/.env, then restart the app.".to_string()
+    })?;
     let api_key = api_secret.value;
     let key_source = api_secret.source;
     let key_fingerprint = runtime_config::key_fingerprint(&api_key);
-    let model = openai_model();
+    let model = model_override
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(anthropic_model);
+    let api_version = anthropic_version();
 
     let system_prompt = build_system_prompt();
-    let tools = build_openai_tools(connectors::connector_tools_as_function_declarations());
-    
+    let tools = build_claude_tools(connectors::connector_tools_as_function_declarations());
+
     let mut input = history;
 
     // If history is empty, add the initial user prompt.
@@ -813,7 +885,7 @@ pub async fn run_agent(
     if input.is_empty() {
         input.push(json!({
             "role": "user",
-            "content": [{ "type": "input_text", "text": prompt }]
+            "content": [{ "type": "text", "text": prompt }]
         }));
     } else {
         // clui-shim includes the current prompt in the history it sends.
@@ -878,35 +950,24 @@ pub async fn run_agent(
 
         let body = json!({
             "model": model,
-            "instructions": system_prompt,
+            "max_tokens": 4096,
+            "system": system_prompt,
             "tools": tools,
-            "input": input,
+            "messages": input,
         });
 
-        let response = client
-            .post("https://api.openai.com/v1/responses")
-            .bearer_auth(&api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let status = response.status();
-        let data: Value = response.json().await.map_err(|e| e.to_string())?;
+        let (status, data) = post_claude_message(&client, &api_key, &api_version, &body).await?;
 
         // Check for API error
-        if let Some(err) = data.get("error") {
+        if !status.is_success() || data.get("error").is_some() {
+            let err = data.get("error").unwrap_or(&Value::Null);
             let api_msg = err["message"]
                 .as_str()
-                .unwrap_or("OpenAI API error")
+                .unwrap_or("Claude API error")
                 .to_string();
             let msg = format!(
-                "OpenAI API error (status {}, model {}, key source {}, key fingerprint {}): {}",
-                status,
-                model,
-                key_source,
-                key_fingerprint,
-                api_msg
+                "Claude API error (status {}, model {}, key source {}, key fingerprint {}): {}",
+                status, model, key_source, key_fingerprint, api_msg
             );
             window
                 .emit(
@@ -923,19 +984,19 @@ pub async fn run_agent(
             return Err(msg);
         }
 
-        let output = data["output"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let function_calls = openai_function_calls(&output);
-        input.extend(output.clone());
+        let output = data["content"].as_array().cloned().unwrap_or_default();
+        let function_calls = claude_tool_calls(&output);
+        input.push(json!({
+            "role": "assistant",
+            "content": output.clone()
+        }));
 
         // Check if any part is a functionCall
         let has_tool_calls = !function_calls.is_empty();
 
         if has_tool_calls {
-            use std::hash::{Hash, Hasher};
             use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
 
             let mut current_action_summary = String::new();
             for (_, name, args) in &function_calls {
@@ -964,336 +1025,350 @@ pub async fn run_agent(
                         },
                     )
                     .ok();
-                
-                for (call_id, _, _) in &function_calls {
-                    input.push(openai_tool_output(call_id, msg.clone()));
-                }
+
+                input.push(json!({
+                    "role": "user",
+                    "content": function_calls
+                        .iter()
+                        .map(|(call_id, _, _)| claude_tool_error(call_id, msg.clone()))
+                        .collect::<Vec<_>>()
+                }));
                 continue;
             }
 
             // Collect all function responses in one turn
             let mut function_responses: Vec<Value> = vec![];
-            let mut image_inputs: Vec<Value> = vec![];
 
             for (call_id, name, args) in &function_calls {
-                    // Guardrail: avoid opening multiple file manager windows for a single request.
-                    if name == "open_path" {
-                        let requested = args["path"].as_str().unwrap_or("").trim().to_string();
-                        if requested.is_empty() {
-                            function_responses.push(openai_tool_output(call_id, "error: open_path requires a non-empty path"));
-                            continue;
-                        }
-
-                        if opened_paths.contains(&requested) {
-                            function_responses.push(openai_tool_output(
-                                call_id,
-                                format!("skipped: path already opened in this request ({})", requested),
-                            ));
-                            continue;
-                        }
-
-                        if open_path_calls >= 1 {
-                            function_responses.push(openai_tool_output(call_id, "skipped: open_path already used once in this request"));
-                            continue;
-                        }
-
-                        opened_paths.insert(requested);
-                        open_path_calls += 1;
+                // Guardrail: avoid opening multiple file manager windows for a single request.
+                if name == "open_path" {
+                    let requested = args["path"].as_str().unwrap_or("").trim().to_string();
+                    if requested.is_empty() {
+                        function_responses.push(claude_tool_error(
+                            call_id,
+                            "open_path requires a non-empty path",
+                        ));
+                        continue;
                     }
 
-                    // ── Safety: classify the tool call ──
-                    let (operation, mut risk) = classify_tool_call(name, args);
-                    if connectors::connector_tool_is_write(name) {
-                        risk = RiskLevel::Dangerous;
-                    }
-                    // Screenshot approval is temporarily disabled.
-                    // if name == "screenshot" {
-                    //     risk = RiskLevel::Dangerous;
-                    // }
-                    let human_desc = operation_human_description(&operation);
-                    let current_category = tool_category(name).to_string();
-
-                    if let Some((prev_desc, prev_category)) = &previous_tool_context {
-                        if prev_category != &current_category {
-                            let payload = json!({
-                                "previous_task": prev_desc,
-                                "new_task": human_desc,
-                                "reason": task_switch_reason(prev_category, &current_category),
-                                "necessary": true
-                            });
-                            window
-                                .emit(
-                                    "agent_event",
-                                    AgentEvent {
-                                        kind: "task_switch".into(),
-                                        content: payload.to_string(),
-                                    },
-                                )
-                                .ok();
-                        }
+                    if opened_paths.contains(&requested) {
+                        function_responses.push(claude_tool_result(
+                            call_id,
+                            format!(
+                                "skipped: path already opened in this request ({})",
+                                requested
+                            ),
+                        ));
+                        continue;
                     }
 
-                    let mut screenshot_pre_result: Option<Result<String, String>> = None;
-                    let mut preview_b64 = None;
-                    if name == "screenshot" {
-                        // Hide window before taking the screenshot so it doesn't obstruct the user's view
-                        window.hide().ok();
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-                        let res = tools::screenshot_tool();
-
-                        // Restore window
-                        window.show().ok();
-                        window.set_focus().ok();
-
-                        if let Ok(ref s) = res {
-                            if s.starts_with("SCREENSHOT_BASE64:") {
-                                preview_b64 = Some(s["SCREENSHOT_BASE64:".len()..].to_string());
-                            }
-                        }
-                        screenshot_pre_result = Some(res);
+                    if open_path_calls >= 1 {
+                        function_responses.push(claude_tool_result(
+                            call_id,
+                            "skipped: open_path already used once in this request",
+                        ));
+                        continue;
                     }
 
-                    // ── Safety: scope check ──
-                    let violation = scope_guard.check(&operation);
-                    if violation.is_violation() {
-                        let block_msg = violation.message();
+                    opened_paths.insert(requested);
+                    open_path_calls += 1;
+                }
+
+                // ── Safety: classify the tool call ──
+                let (operation, mut risk) = classify_tool_call(name, args);
+                if connectors::connector_tool_is_write(name) {
+                    risk = RiskLevel::Dangerous;
+                }
+                // Screenshot approval is temporarily disabled.
+                // if name == "screenshot" {
+                //     risk = RiskLevel::Dangerous;
+                // }
+                let human_desc = operation_human_description(&operation);
+                let current_category = tool_category(name).to_string();
+
+                if let Some((prev_desc, prev_category)) = &previous_tool_context {
+                    if prev_category != &current_category {
+                        let payload = json!({
+                            "previous_task": prev_desc,
+                            "new_task": human_desc,
+                            "reason": task_switch_reason(prev_category, &current_category),
+                            "necessary": true
+                        });
                         window
                             .emit(
                                 "agent_event",
                                 AgentEvent {
-                                    kind: "tool_call".into(),
-                                    content: format!("[BLOCKED] {}: {}", name, block_msg),
+                                    kind: "task_switch".into(),
+                                    content: payload.to_string(),
                                 },
                             )
                             .ok();
-                        function_responses.push(openai_tool_output(call_id, format!("error: {}", block_msg)));
-                        continue;
                     }
+                }
 
-                    // Emit tool_call event with risk badge
-                    let risk_tag = match risk {
-                        RiskLevel::Safe => "",
-                        RiskLevel::Caution => " [⚠ caution]",
-                        RiskLevel::Dangerous => " [🔴 dangerous]",
-                        RiskLevel::Nuclear => " [☢ nuclear]",
-                    };
-                    let tool_call_payload = json!({
-                        "name": name,
-                        "args": args,
-                        "human_desc": human_desc,
-                        "risk_tag": risk_tag
-                    });
+                let mut screenshot_pre_result: Option<Result<String, String>> = None;
+                let mut preview_b64 = None;
+                if name == "screenshot" {
+                    // Hide window before taking the screenshot so it doesn't obstruct the user's view
+                    window.hide().ok();
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+                    let res = tools::screenshot_tool();
+
+                    // Restore window
+                    window.show().ok();
+                    window.set_focus().ok();
+
+                    if let Ok(ref s) = res {
+                        if s.starts_with("SCREENSHOT_BASE64:") {
+                            preview_b64 = Some(s["SCREENSHOT_BASE64:".len()..].to_string());
+                        }
+                    }
+                    screenshot_pre_result = Some(res);
+                }
+
+                // ── Safety: scope check ──
+                let violation = scope_guard.check(&operation);
+                if violation.is_violation() {
+                    let block_msg = violation.message();
                     window
                         .emit(
                             "agent_event",
                             AgentEvent {
                                 kind: "tool_call".into(),
-                                content: tool_call_payload.to_string(),
+                                content: format!("[BLOCKED] {}: {}", name, block_msg),
                             },
                         )
                         .ok();
+                    function_responses.push(claude_tool_error(call_id, block_msg));
+                    continue;
+                }
 
-                    // ── Safety: approval gate for Dangerous/Nuclear ops ──
-                    if risk >= RiskLevel::Dangerous {
-                        let plan_id = uuid::Uuid::new_v4().to_string();
+                // Emit tool_call event with risk badge
+                let risk_tag = match risk {
+                    RiskLevel::Safe => "",
+                    RiskLevel::Caution => " [⚠ caution]",
+                    RiskLevel::Dangerous => " [🔴 dangerous]",
+                    RiskLevel::Nuclear => " [☢ nuclear]",
+                };
+                let tool_call_payload = json!({
+                    "name": name,
+                    "args": args,
+                    "human_desc": human_desc,
+                    "risk_tag": risk_tag
+                });
+                window
+                    .emit(
+                        "agent_event",
+                        AgentEvent {
+                            kind: "tool_call".into(),
+                            content: tool_call_payload.to_string(),
+                        },
+                    )
+                    .ok();
 
-                        // Build a minimal execution plan for the UI
-                        let approval_payload = serde_json::json!({
-                            "id": plan_id,
-                            "summary": format!("The agent wants to: {}", human_desc),
-                            "steps": [{
-                                "index": 0,
-                                "description": human_desc,
-                                "operation": serde_json::to_value(&operation).unwrap_or(serde_json::json!({})),
-                                "risk": risk.to_string(),
-                                "can_undo": false,
-                                "undo_description": null
-                            }],
-                            "overall_risk": risk.to_string(),
-                            "preview_image": preview_b64
-                        });
+                // ── Safety: approval gate for Dangerous/Nuclear ops ──
+                if risk >= RiskLevel::Dangerous {
+                    let plan_id = uuid::Uuid::new_v4().to_string();
 
-                        // Emit to frontend — PlanApprovalPanel listens for this
-                        window.emit("plan_ready", &approval_payload).ok();
+                    // Build a minimal execution plan for the UI
+                    let approval_payload = serde_json::json!({
+                        "id": plan_id,
+                        "summary": format!("The agent wants to: {}", human_desc),
+                        "steps": [{
+                            "index": 0,
+                            "description": human_desc,
+                            "operation": serde_json::to_value(&operation).unwrap_or(serde_json::json!({})),
+                            "risk": risk.to_string(),
+                            "can_undo": false,
+                            "undo_description": null
+                        }],
+                        "overall_risk": risk.to_string(),
+                        "preview_image": preview_b64
+                    });
 
-                        // Wait for user to approve or reject (5 min timeout)
-                        let rx = plan_state.wait_for_approval(plan_id.clone());
-                        let approved = match tokio::time::timeout(
-                            std::time::Duration::from_secs(300),
-                            rx,
-                        )
-                        .await
-                        {
+                    // Emit to frontend — PlanApprovalPanel listens for this
+                    window.emit("plan_ready", &approval_payload).ok();
+
+                    // Wait for user to approve or reject (5 min timeout)
+                    let rx = plan_state.wait_for_approval(plan_id.clone());
+                    let approved =
+                        match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
                             Ok(Ok(true)) => true,
                             Ok(Ok(false)) => false,
                             Ok(Err(_)) => false, // channel dropped
                             Err(_) => false,     // timeout
                         };
 
-                        if !approved {
-                            let reject_msg = format!("Operation cancelled by user: {}", human_desc);
-                            window
-                                .emit(
-                                    "agent_event",
-                                    AgentEvent {
-                                        kind: "tool_result".into(),
-                                        content: format!("CANCELLED: {}", reject_msg),
-                                    },
-                            )
-                                .ok();
-                            function_responses.push(openai_tool_output(call_id, format!("error: {}", reject_msg)));
-                            continue;
-                        }
-                    }
-
-                    // ── Hard block: never allow shell_exec to manage Chrome ──
-                    // Prompt-level rules are insufficient — LLMs deviate. Enforce in code.
-                    if name == "shell_exec" {
-                        let cmd = args["command"].as_str().unwrap_or("").to_lowercase();
-                        let targets_chrome = cmd.contains("google chrome")
-                            || cmd.contains("google-chrome")
-                            || cmd.contains("chrome.exe");
-                        let is_lifecycle = cmd.contains("open ")
-                            || cmd.contains("start ")
-                            || cmd.contains("pkill")
-                            || cmd.contains("killall")
-                            || cmd.contains("kill ")
-                            || cmd.contains("launch");
-                        if targets_chrome && is_lifecycle {
-                            window
-                                .emit(
-                                    "agent_event",
-                                    AgentEvent {
-                                        kind: "tool_result".into(),
-                                        content: "[BLOCKED] shell_exec targeting Chrome — use browser_navigate instead".into(),
-                                    },
-                                )
-                                .ok();
-                            function_responses.push(openai_tool_output(
-                                call_id,
-                                "error: Do not use shell commands to open or kill Chrome. Call browser_navigate directly — it manages Chrome automatically.",
-                            ));
-                            continue;
-                        }
-                    }
-
-                    // ── Safety: snapshot before mutable ops ──
-                    // Even RiskLevel::Safe operations like CreateDir should be snapshotted if they are mutable.
-                    let snapshot = undo::snapshot_before_operation(&operation).ok();
-
-                    // Execute the tool (no artificial delays — runs at full OS speed)
-                    let result = if connectors::is_connector_tool(name) {
-                        connector_registry.dispatch_tool(name, args).await
-                    } else if name.starts_with("browser_") {
-                        crate::browser::actions::dispatch_browser_tool(name, args, &browser_state).await
-                    } else if name == "computer_use" {
-                        let task = args["task"].as_str().unwrap_or("");
-                        let max_steps = args["max_steps"].as_u64().unwrap_or(15) as usize;
-                        run_computer_use_loop(task, max_steps, &window, &interrupt_state).await
-                    } else if let Some(pre_res) = screenshot_pre_result {
-                        pre_res
-                    } else {
-                        tools::dispatch_tool(name, args)
-                    };
-
-                    // ── Safety: push undo entry if we took a snapshot ──
-                    if let Some(snap) = snapshot {
-                        if result.is_ok() && snap.can_undo() {
-                            undo_stack.push(undo::UndoEntry {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                timestamp: Utc::now(),
-                                description: human_desc.clone(),
-                                snapshot: snap,
-                            });
-                        }
-                    }
-
-                    // ── Interrupt check: after each tool, bail immediately if requested ──
-                    if interrupt_state.0.load(Ordering::SeqCst) {
+                    if !approved {
+                        let reject_msg = format!("Operation cancelled by user: {}", human_desc);
                         window
                             .emit(
                                 "agent_event",
                                 AgentEvent {
-                                    kind: "error".into(),
-                                    content: "Agent interrupted by user.".into(),
+                                    kind: "tool_result".into(),
+                                    content: format!("CANCELLED: {}", reject_msg),
                                 },
                             )
                             .ok();
-                        if let Some(manager) = browser_state.lock().await.as_mut() {
-                            manager.close_orphaned_tabs().await;
-                        }
-                        return Err("Agent interrupted by user.".to_string());
+                        function_responses.push(claude_tool_error(call_id, reject_msg));
+                        continue;
                     }
+                }
 
-                    // Emit tool_result event
-                    match &result {
-                        Ok(output) => window
+                // ── Hard block: never allow shell_exec to manage Chrome ──
+                // Prompt-level rules are insufficient — LLMs deviate. Enforce in code.
+                if name == "shell_exec" {
+                    let cmd = args["command"].as_str().unwrap_or("").to_lowercase();
+                    let targets_chrome = cmd.contains("google chrome")
+                        || cmd.contains("google-chrome")
+                        || cmd.contains("chrome.exe");
+                    let is_lifecycle = cmd.contains("open ")
+                        || cmd.contains("start ")
+                        || cmd.contains("pkill")
+                        || cmd.contains("killall")
+                        || cmd.contains("kill ")
+                        || cmd.contains("launch");
+                    if targets_chrome && is_lifecycle {
+                        window
                             .emit(
                                 "agent_event",
                                 AgentEvent {
                                     kind: "tool_result".into(),
-                                    content: output.clone(),
+                                    content: "[BLOCKED] shell_exec targeting Chrome — use browser_navigate instead".into(),
                                 },
                             )
-                            .ok(),
-                        Err(e) => window
-                            .emit(
-                                "agent_event",
-                                AgentEvent {
-                                    kind: "tool_result".into(),
-                                    content: format!("ERROR: {}", e),
-                                },
-                            )
-                            .ok(),
-                    };
-
-                    let output_str = result.unwrap_or_else(|e| format!("error: {}", e));
-                    previous_tool_context = Some((human_desc.clone(), current_category));
-
-                    // ── Vision: if the tool returned a screenshot, send as inline image ──
-                    if output_str.starts_with("SCREENSHOT_BASE64:") {
-                        // Pure screenshot (e.g. screenshot tool, browser_screenshot)
-                        let b64_data = &output_str["SCREENSHOT_BASE64:".len()..];
-                        function_responses.push(openai_tool_output(
+                            .ok();
+                        function_responses.push(claude_tool_error(
                             call_id,
-                            "Screenshot captured. Analyze the image to identify UI elements, their positions, and decide next actions.",
+                            "Do not use shell commands to open or kill Chrome. Call browser_navigate directly - it manages Chrome automatically.",
                         ));
-                        image_inputs.push(json!({
-                            "type": "input_image",
-                            "image_url": format!("data:image/png;base64,{}", b64_data)
-                        }));
-                    } else if let Some(idx) = output_str.find("\nSCREENSHOT_BASE64:") {
-                        // Mixed output with embedded screenshot (e.g. browser_get_page_state)
-                        let text_part = &output_str[..idx];
-                        let b64_data = &output_str[idx + "\nSCREENSHOT_BASE64:".len()..];
-                        function_responses.push(openai_tool_output(call_id, text_part.to_string()));
-                        image_inputs.push(json!({
-                            "type": "input_image",
-                            "image_url": format!("data:image/png;base64,{}", b64_data)
-                        }));
-                    } else {
-                        function_responses.push(openai_tool_output(call_id, output_str));
+                        continue;
                     }
+                }
+
+                // ── Safety: snapshot before mutable ops ──
+                // Even RiskLevel::Safe operations like CreateDir should be snapshotted if they are mutable.
+                let snapshot = undo::snapshot_before_operation(&operation).ok();
+
+                // Execute the tool (no artificial delays — runs at full OS speed)
+                let result = if connectors::is_connector_tool(name) {
+                    connector_registry.dispatch_tool(name, args).await
+                } else if name.starts_with("browser_") {
+                    crate::browser::actions::dispatch_browser_tool(name, args, &browser_state).await
+                } else if name == "computer_use" {
+                    let task = args["task"].as_str().unwrap_or("");
+                    let max_steps = args["max_steps"].as_u64().unwrap_or(15) as usize;
+                    run_computer_use_loop(task, max_steps, &window, &interrupt_state).await
+                } else if let Some(pre_res) = screenshot_pre_result {
+                    pre_res
+                } else {
+                    tools::dispatch_tool(name, args)
+                };
+
+                // ── Safety: push undo entry if we took a snapshot ──
+                if let Some(snap) = snapshot {
+                    if result.is_ok() && snap.can_undo() {
+                        undo_stack.push(undo::UndoEntry {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            timestamp: Utc::now(),
+                            description: human_desc.clone(),
+                            snapshot: snap,
+                        });
+                    }
+                }
+
+                // ── Interrupt check: after each tool, bail immediately if requested ──
+                if interrupt_state.0.load(Ordering::SeqCst) {
+                    window
+                        .emit(
+                            "agent_event",
+                            AgentEvent {
+                                kind: "error".into(),
+                                content: "Agent interrupted by user.".into(),
+                            },
+                        )
+                        .ok();
+                    if let Some(manager) = browser_state.lock().await.as_mut() {
+                        manager.close_orphaned_tabs().await;
+                    }
+                    return Err("Agent interrupted by user.".to_string());
+                }
+
+                // Emit tool_result event
+                match &result {
+                    Ok(output) => window
+                        .emit(
+                            "agent_event",
+                            AgentEvent {
+                                kind: "tool_result".into(),
+                                content: output.clone(),
+                            },
+                        )
+                        .ok(),
+                    Err(e) => window
+                        .emit(
+                            "agent_event",
+                            AgentEvent {
+                                kind: "tool_result".into(),
+                                content: format!("ERROR: {}", e),
+                            },
+                        )
+                        .ok(),
+                };
+
+                let output_str = result.unwrap_or_else(|e| format!("error: {}", e));
+                previous_tool_context = Some((human_desc.clone(), current_category));
+
+                // ── Vision: if the tool returned a screenshot, send as inline image ──
+                if output_str.starts_with("SCREENSHOT_BASE64:") {
+                    // Pure screenshot (e.g. screenshot tool, browser_screenshot)
+                    let b64_data = &output_str["SCREENSHOT_BASE64:".len()..];
+                    function_responses.push(claude_tool_result_block(
+                        call_id,
+                        json!([
+                            {
+                                "type": "text",
+                                "text": "Screenshot captured. Analyze the image to identify UI elements, their positions, and decide next actions."
+                            },
+                            claude_image_block(b64_data)
+                        ]),
+                        false,
+                    ));
+                } else if let Some(idx) = output_str.find("\nSCREENSHOT_BASE64:") {
+                    // Mixed output with embedded screenshot (e.g. browser_get_page_state)
+                    let text_part = &output_str[..idx];
+                    let b64_data = &output_str[idx + "\nSCREENSHOT_BASE64:".len()..];
+                    function_responses.push(claude_tool_result_block(
+                        call_id,
+                        json!([
+                            {
+                                "type": "text",
+                                "text": text_part
+                            },
+                            claude_image_block(b64_data)
+                        ]),
+                        false,
+                    ));
+                } else {
+                    let is_error = output_str.trim_start().starts_with("error:");
+                    function_responses.push(claude_tool_result_block(
+                        call_id,
+                        json!(output_str),
+                        is_error,
+                    ));
+                }
             }
 
-            input.extend(function_responses);
-            if !image_inputs.is_empty() {
-                let mut content = vec![json!({
-                    "type": "input_text",
-                    "text": "Image output from the previous tool call."
-                })];
-                content.extend(image_inputs);
-                input.push(json!({
-                    "role": "user",
-                    "content": content
-                }));
-            }
+            input.push(json!({
+                "role": "user",
+                "content": function_responses
+            }));
 
             // Continue loop
         } else {
             // No tool calls — extract final text and finish
-            let text = message_text_from_openai_output(&output);
+            let text = message_text_from_claude_content(&output);
 
             window
                 .emit(

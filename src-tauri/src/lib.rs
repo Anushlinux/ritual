@@ -199,6 +199,7 @@ async fn get_runtime_config_status_command() -> Result<runtime_config::RuntimeCo
 async fn run_agent_command(
     prompt: String,
     history: Vec<serde_json::Value>,
+    model: Option<String>,
     window: tauri::Window,
     state: State<'_, InterruptState>,
     scope_guard: State<'_, ScopeGuard>,
@@ -211,6 +212,7 @@ async fn run_agent_command(
     agent::run_agent(
         prompt,
         history,
+        model,
         window,
         state,
         scope_guard,

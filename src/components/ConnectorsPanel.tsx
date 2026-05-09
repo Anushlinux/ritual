@@ -16,6 +16,7 @@ function ConnectorCard({ connector }: { connector: ConnectorInfo }) {
   const loading = useSessionStore((s) => s.connectorsLoading)
   const tools = useSessionStore((s) => s.connectorTools.filter((t) => t.provider === connector.provider))
   const connected = connector.status === 'connected'
+  const buttonLabel = connected ? 'Disconnect' : 'Setup'
 
   return (
     <div
@@ -55,6 +56,11 @@ function ConnectorCard({ connector }: { connector: ConnectorInfo }) {
             <div className="text-[11px] leading-[1.4] mt-1" style={{ color: colors.textSecondary }}>
               {connector.message || (connected ? 'Ready for actions.' : 'Connect to enable actions.')}
             </div>
+            {!connected && (
+              <div className="text-[10px] leading-[1.35] mt-1.5" style={{ color: colors.textTertiary }}>
+                Token-based setup only. This action stays in-app and shows the required env variable.
+              </div>
+            )}
           </div>
         </div>
 
@@ -70,7 +76,7 @@ function ConnectorCard({ connector }: { connector: ConnectorInfo }) {
           }}
         >
           {connected ? <X size={10} /> : <Plug size={10} />}
-          {connected ? 'Disconnect' : 'Connect'}
+          {buttonLabel}
         </button>
       </div>
 
@@ -147,7 +153,7 @@ export function ConnectorsPanel() {
           <div className="min-w-0">
             <div className="text-[14px] font-semibold">Connectors</div>
             <div className="text-[11px]" style={{ color: colors.textSecondary }}>
-              Google and GitHub actions through MCP-style tools
+              Token-based Google and GitHub actions through MCP-style tools
             </div>
           </div>
         </div>

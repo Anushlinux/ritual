@@ -3,7 +3,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.4";
+pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5-20250929";
+pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSecret {
@@ -49,20 +50,24 @@ pub fn read_runtime_env(name: &str) -> Option<String> {
     read_runtime_secret(name).map(|secret| secret.value)
 }
 
-pub fn openai_model() -> String {
-    read_runtime_env("OPENAI_MODEL").unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string())
+pub fn anthropic_model() -> String {
+    read_runtime_env("ANTHROPIC_MODEL").unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string())
+}
+
+pub fn anthropic_version() -> String {
+    read_runtime_env("ANTHROPIC_VERSION").unwrap_or_else(|| DEFAULT_ANTHROPIC_VERSION.to_string())
 }
 
 pub fn runtime_config_status() -> RuntimeConfigStatus {
-    let openai = read_runtime_secret("OPENAI_API_KEY");
+    let anthropic = read_runtime_secret("ANTHROPIC_API_KEY");
     RuntimeConfigStatus {
-        provider: "OpenAI".to_string(),
-        model: openai_model(),
-        key_source: openai
+        provider: "Claude".to_string(),
+        model: anthropic_model(),
+        key_source: anthropic
             .as_ref()
             .map(|s| s.source.clone())
             .unwrap_or_else(|| "missing".to_string()),
-        key_fingerprint: openai
+        key_fingerprint: anthropic
             .as_ref()
             .map(|s| key_fingerprint(&s.value))
             .unwrap_or_else(|| "missing".to_string()),

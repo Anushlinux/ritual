@@ -7,8 +7,8 @@ const notificationSrc = ''
 // ─── Known models ───
 
 export const AVAILABLE_MODELS = [
-  { id: 'claude-opus-4-6', label: 'Opus 4.6' },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
+  { id: 'claude-opus-4-1-20250805', label: 'Opus 4.1' },
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
 ] as const
 
@@ -331,15 +331,17 @@ export const useSessionStore = create<State>((set, get) => ({
   },
 
   connectConnector: async (provider) => {
-    set({ connectorsLoading: true, connectorsError: null, connectorsNotice: null })
+    set({ connectorsOpen: true, connectorsLoading: true, connectorsError: null, connectorsNotice: null })
     try {
       const result = await window.clui.connectConnector(provider)
       await get().loadConnectors()
       set({
+        connectorsOpen: true,
         connectorsNotice: result.message,
       })
     } catch (err: unknown) {
       set({
+        connectorsOpen: true,
         connectorsLoading: false,
         connectorsError: err instanceof Error ? err.message : String(err),
         connectorsNotice: null,
@@ -348,13 +350,14 @@ export const useSessionStore = create<State>((set, get) => ({
   },
 
   disconnectConnector: async (provider) => {
-    set({ connectorsLoading: true, connectorsError: null, connectorsNotice: null })
+    set({ connectorsOpen: true, connectorsLoading: true, connectorsError: null, connectorsNotice: null })
     try {
       await window.clui.disconnectConnector(provider)
       await get().loadConnectors()
-      set({ connectorsNotice: `${provider} disconnected.` })
+      set({ connectorsOpen: true, connectorsNotice: `${provider} disconnected.` })
     } catch (err: unknown) {
       set({
+        connectorsOpen: true,
         connectorsLoading: false,
         connectorsError: err instanceof Error ? err.message : String(err),
         connectorsNotice: null,

@@ -39,4 +39,4 @@ Pull requests should describe the user-facing change, list verification commands
 
 ## Security & Configuration Tips
 
-Do not commit real `.env` files, service account JSON, API keys, or generated bundles. Use `src-tauri/.env.example` as the template for `GEMINI_API_KEY`, `GCP_SERVICE_ACCOUNT_KEY_PATH`, and optional Speech-to-Text settings.
+Do not commit real `.env` files, service account JSON, API keys, or generated bundles. Use `src-tauri/.env.example` as the template for `ANTHROPIC_API_KEY`, optional `ANTHROPIC_MODEL`, `GCP_SERVICE_ACCOUNT_KEY_PATH`, and optional Speech-to-Text settings.

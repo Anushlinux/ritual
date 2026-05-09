@@ -265,7 +265,7 @@ export function SettingsPopover() {
                 <Key size={14} style={{ color: colors.textTertiary, marginTop: 2 }} />
                 <div className="min-w-0">
                   <div className="text-[12px] font-medium" style={{ color: colors.textPrimary }}>
-                    OpenAI runtime
+                    Claude runtime
                   </div>
                   <div className="text-[10px] leading-[1.45] mt-1" style={{ color: colors.textSecondary }}>
                     {runtimeConfig

@@ -68,7 +68,7 @@ impl ConnectorRegistry {
                     "Gmail read/write/send".to_string(),
                     "Calendar read/write".to_string(),
                 ],
-                auth_url: self.oauth_url("google"),
+                auth_url: None,
                 message: self.provider_message("google"),
             },
             ConnectorInfo {
@@ -79,7 +79,7 @@ impl ConnectorRegistry {
                     "Read repositories, issues, and pull requests".to_string(),
                     "Create issues and comments".to_string(),
                 ],
-                auth_url: self.oauth_url("github"),
+                auth_url: None,
                 message: self.provider_message("github"),
             },
         ]
@@ -92,29 +92,16 @@ impl ConnectorRegistry {
     pub fn connect(&self, provider: &str) -> ConnectConnectorResult {
         let normalized = normalize_provider(provider);
         let status = self.provider_status(&normalized);
-        let auth_url = self.oauth_url(&normalized);
         let message = match status {
             ConnectorStatus::Connected => format!("{} is connected.", provider_label(&normalized)),
-            ConnectorStatus::Disconnected => {
-                let oauth_note = if auth_url.is_some() {
-                    " OAuth client settings were found, but the in-app OAuth callback is not implemented yet."
-                } else {
-                    ""
-                };
-                format!(
-                    "Set {} in src-tauri/.env, then restart the app to connect {}.{}",
-                    token_env_name(&normalized),
-                    provider_label(&normalized),
-                    oauth_note,
-                )
-            }
+            ConnectorStatus::Disconnected => connector_setup_message(&normalized),
             ConnectorStatus::Error => format!("{} connector is misconfigured.", provider_label(&normalized)),
         };
 
         ConnectConnectorResult {
             provider: normalized,
             status,
-            auth_url,
+            auth_url: None,
             message,
         }
     }
@@ -148,10 +135,7 @@ impl ConnectorRegistry {
         if self.token(provider).is_some() {
             Some("Ready for connector actions.".to_string())
         } else {
-            Some(format!(
-                "Not connected. Set {} in src-tauri/.env, then restart the app.",
-                token_env_name(provider)
-            ))
+            Some(connector_setup_message(provider))
         }
     }
 
@@ -165,40 +149,6 @@ impl ConnectorRegistry {
         }
 
         read_runtime_env(token_env_name(provider))
-    }
-
-    fn oauth_url(&self, provider: &str) -> Option<String> {
-        match provider {
-            "google" => {
-                let client_id = read_runtime_env("GOOGLE_OAUTH_CLIENT_ID")?;
-                let redirect_uri = read_runtime_env("GOOGLE_OAUTH_REDIRECT_URI")
-                    .unwrap_or_else(|| "http://127.0.0.1:58231/oauth/google/callback".to_string());
-                let scope = [
-                    "https://www.googleapis.com/auth/gmail.readonly",
-                    "https://www.googleapis.com/auth/gmail.compose",
-                    "https://www.googleapis.com/auth/gmail.send",
-                    "https://www.googleapis.com/auth/calendar.events",
-                ].join(" ");
-                Some(format!(
-                    "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&access_type=offline&prompt=consent&client_id={}&redirect_uri={}&scope={}",
-                    url_encode(&client_id),
-                    url_encode(&redirect_uri),
-                    url_encode(&scope)
-                ))
-            }
-            "github" => {
-                let client_id = read_runtime_env("GITHUB_OAUTH_CLIENT_ID")?;
-                let redirect_uri = read_runtime_env("GITHUB_OAUTH_REDIRECT_URI")
-                    .unwrap_or_else(|| "http://127.0.0.1:58231/oauth/github/callback".to_string());
-                Some(format!(
-                    "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope={}&allow_signup=true",
-                    url_encode(&client_id),
-                    url_encode(&redirect_uri),
-                    url_encode("repo read:user")
-                ))
-            }
-            _ => None,
-        }
     }
 
     async fn dispatch_github(&self, name: &str, args: &Value) -> Result<String, String> {
@@ -564,6 +514,13 @@ fn token_env_name(provider: &str) -> &'static str {
         "github" => "GITHUB_TOKEN",
         _ => "CONNECTOR_TOKEN",
     }
+}
+
+fn connector_setup_message(provider: &str) -> String {
+    format!(
+        "Not connected. Add {} to src-tauri/.env, then restart the app. OAuth sign-in is not wired yet.",
+        token_env_name(provider)
+    )
 }
 
 fn normalize_provider(provider: &str) -> String {
