@@ -1,12 +1,12 @@
-import React, { useEffect, useCallback, useRef, useState } from 'react'
+import { useEffect, useCallback, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Paperclip, Camera, PlugsConnected, ClockCounterClockwise } from '@phosphor-icons/react'
+import { Paperclip, Camera, ClockCounterClockwise } from '@phosphor-icons/react'
 import { TabStrip } from './components/TabStrip'
 import { ConversationView } from './components/ConversationView'
 import { InputBar } from './components/InputBar'
 import { StatusBar } from './components/StatusBar'
 import { MarketplacePanel } from './components/MarketplacePanel'
-import { ConnectorsPanel } from './components/ConnectorsPanel'
+import { OnboardingExperience } from './components/OnboardingExperience'
 import { PopoverLayerProvider } from './components/PopoverLayer'
 import { useClaudeEvents } from './hooks/useClaudeEvents'
 import { useHealthReconciliation } from './hooks/useHealthReconciliation'
@@ -14,6 +14,7 @@ import { useSessionStore } from './stores/sessionStore'
 import { useColors, useThemeStore, spacing } from './theme'
 import { PlanApprovalPanel } from './components/PlanApprovalPanel'
 import { invoke } from '@tauri-apps/api/core'
+import type { OnboardingState } from './types'
 
 const TRANSITION = { duration: 0.26, ease: [0.4, 0, 0.1, 1] as const }
 
@@ -30,12 +31,12 @@ export default function App() {
   // ─── Theme initialization ───
   useEffect(() => {
     // Get initial OS theme — setSystemTheme respects themeMode (system/light/dark)
-    window.clui.getTheme().then(({ isDark }) => {
+    window.clui.getTheme().then(({ isDark }: { isDark: boolean }) => {
       setSystemTheme(isDark)
     }).catch(() => {})
 
     // Listen for OS theme changes
-    const unsub = window.clui.onThemeChange((isDark) => {
+    const unsub = window.clui.onThemeChange((isDark: boolean) => {
       setSystemTheme(isDark)
     })
     return unsub
@@ -53,7 +54,7 @@ export default function App() {
         useSessionStore.setState((s) => ({
           tabs: s.tabs.map((t, i) => (i === 0 ? { ...t, workingDirectory: homeDir, hasChosenDirectory: false } : t)),
         }))
-        window.clui.createTab().then(({ tabId }) => {
+        window.clui.createTab().then(({ tabId }: { tabId: string }) => {
           useSessionStore.setState((s) => ({
             tabs: s.tabs.map((t, i) => (i === 0 ? { ...t, id: tabId } : t)),
             activeTabId: tabId,
@@ -70,13 +71,36 @@ export default function App() {
   // Resize the native window to exactly fit the visible UI content.
   const isExpanded = useSessionStore((s) => s.isExpanded)
   const marketplaceOpen = useSessionStore((s) => s.marketplaceOpen)
-  const connectorsOpen = useSessionStore((s) => s.connectorsOpen)
   const [isFilePickerCompact, setIsFilePickerCompact] = useState(false)
   const [isFilePickerWindowCompact, setIsFilePickerWindowCompact] = useState(false)
   const pendingPlan = useSessionStore((s) => s.pendingPlan)
+  const staticInfo = useSessionStore((s) => s.staticInfo)
+  const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null)
+  const onboardingLoading = onboardingState === null
+  const showOnboarding = onboardingState ? !onboardingState.completed : false
+
+  useEffect(() => {
+    invoke<OnboardingState>('get_onboarding_state')
+      .then(setOnboardingState)
+      .catch(() => setOnboardingState({ completed: true, completed_at: null, version: 1 }))
+  }, [])
+
+  useEffect(() => {
+    const handler = () => {
+      invoke<OnboardingState>('reset_onboarding')
+        .then(setOnboardingState)
+        .catch(() => setOnboardingState({ completed: false, completed_at: null, version: 1 }))
+    }
+    window.addEventListener('ritual:replay-onboarding', handler)
+    return () => window.removeEventListener('ritual:replay-onboarding', handler)
+  }, [])
 
   useEffect(() => {
     if (!window.clui?.resizeWindow) return
+    if (onboardingLoading || showOnboarding) {
+      window.clui.resizeWindow(1200, 700)
+      return
+    }
     if (isFilePickerWindowCompact) {
       // Keep only the input row visible while native file dialog is open.
       window.clui.resizeWindow(1200, 90)
@@ -84,17 +108,17 @@ export default function App() {
     }
     // Collapsed: just tab strip + input pill ≈ 148px
     // Expanded: tab strip + conversation + input ≈ 700px
-    // Marketplace/connectors open: add panel space.
+    // Marketplace open: add panel space.
     let height = 148
-    if (isExpanded && (marketplaceOpen || connectorsOpen)) {
+    if (isExpanded && marketplaceOpen) {
       height = 820
     } else if (isExpanded) {
       height = 700
-    } else if (marketplaceOpen || connectorsOpen) {
+    } else if (marketplaceOpen) {
       height = 720
     }
     window.clui.resizeWindow(1200, height)
-  }, [isExpanded, marketplaceOpen, connectorsOpen, isFilePickerWindowCompact])
+  }, [isExpanded, marketplaceOpen, isFilePickerWindowCompact, onboardingLoading, showOnboarding])
 
   // NOTE: The OS-level click-through (setIgnoreMouseEvents) has been removed.
   // With the window dynamically sized to fit the UI content, there is no large
@@ -181,10 +205,23 @@ export default function App() {
       addSystemMessage(`Undo failed: ${e instanceof Error ? e.message : String(e)}`)
     }
   }, [])
+
+  const handleOnboardingComplete = useCallback(() => {
+    setOnboardingState({ completed: true, completed_at: new Date().toISOString(), version: 1 })
+  }, [])
   
   return (
     <PopoverLayerProvider>
       <div className="flex flex-col justify-end h-full" style={{ background: 'transparent' }}>
+        {onboardingLoading ? (
+          <div data-clui-ui className="h-full w-full" />
+        ) : showOnboarding ? (
+          <OnboardingExperience
+            homePath={staticInfo?.homePath || '~'}
+            onComplete={handleOnboardingComplete}
+          />
+        ) : (
+          <>
 
         {/* ─── 460px content column, centered. Circles overflow left. ─── */}
         <div style={{ width: contentWidth, position: 'relative', margin: '0 auto', transition: 'width 0.26s cubic-bezier(0.4, 0, 0.1, 1)' }}>
@@ -218,39 +255,6 @@ export default function App() {
                     }}
                   >
                     <MarketplacePanel />
-                  </div>
-                </motion.div>
-              </div>
-            )}
-            {connectorsOpen && !isFilePickerCompact && (
-              <div
-                data-clui-ui
-                style={{
-                  width: 860,
-                  maxWidth: 860,
-                  marginLeft: '50%',
-                  transform: 'translateX(-50%)',
-                  marginBottom: 14,
-                  position: 'relative',
-                  zIndex: 30,
-                }}
-              >
-                <motion.div
-                  initial={{ opacity: 0, y: 14, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.985 }}
-                  transition={TRANSITION}
-                >
-                  <div
-                    data-clui-ui
-                    className="glass-surface overflow-hidden no-drag"
-                    style={{
-                      borderRadius: 24,
-                      maxHeight: 560,
-                      overflowY: 'auto',
-                    }}
-                  >
-                    <ConnectorsPanel />
                   </div>
                 </motion.div>
               </div>
@@ -335,18 +339,9 @@ export default function App() {
                 >
                   <Camera size={20} />
                 </button>
-                {/* btn-3: Connectors */}
+                {/* btn-3: Undo */}
                 <button
                   className="stack-btn stack-btn-3 glass-surface"
-                  title="Connectors"
-                  onClick={() => useSessionStore.getState().toggleConnectors()}
-                  disabled={isRunning}
-                >
-                  <PlugsConnected size={20} />
-                </button>
-                {/* btn-4: Undo */}
-                <button
-                  className="stack-btn stack-btn-4 glass-surface"
                   title="Undo last action"
                   onClick={handleUndo}
                   disabled={isRunning}
@@ -371,6 +366,8 @@ export default function App() {
             </div>
           </div>
         </div>
+          </>
+        )}
       </div>
     </PopoverLayerProvider>
   )

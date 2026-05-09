@@ -1,6 +1,7 @@
 mod agent;
 pub mod browser;
 mod connectors;
+mod onboarding;
 mod runtime_config;
 mod safety;
 mod tools;
@@ -193,6 +194,21 @@ async fn interrupt_agent(state: State<'_, InterruptState>) -> Result<(), String>
 #[tauri::command]
 async fn get_runtime_config_status_command() -> Result<runtime_config::RuntimeConfigStatus, String> {
     Ok(runtime_config::runtime_config_status())
+}
+
+#[tauri::command]
+async fn get_onboarding_state() -> Result<onboarding::OnboardingState, String> {
+    Ok(onboarding::get_state())
+}
+
+#[tauri::command]
+async fn complete_onboarding() -> Result<onboarding::OnboardingState, String> {
+    onboarding::complete()
+}
+
+#[tauri::command]
+async fn reset_onboarding() -> Result<onboarding::OnboardingState, String> {
+    onboarding::reset()
 }
 
 #[tauri::command]
@@ -426,6 +442,9 @@ pub fn run() {
             .invoke_handler(tauri::generate_handler![
                 run_agent_command,
                 get_runtime_config_status_command,
+                get_onboarding_state,
+                complete_onboarding,
+                reset_onboarding,
                 interrupt_agent,
                 select_directory_command,
                 attach_files_command,

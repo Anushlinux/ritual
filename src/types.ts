@@ -365,6 +365,12 @@ export interface ScopeConfig {
   deny_system_paths: boolean
 }
 
+export interface OnboardingState {
+  completed: boolean
+  completed_at: string | null
+  version: number
+}
+
 export interface UndoEntry {
   id: string
   timestamp: string

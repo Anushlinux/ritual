@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Microphone, ArrowUp, SpinnerGap, X, Check } from '@phosphor-icons/react'
 import { useSessionStore } from '../stores/sessionStore'
@@ -11,6 +11,22 @@ const INPUT_MAX_HEIGHT = 180
 const MULTILINE_ENTER_HEIGHT = 64
 const MULTILINE_EXIT_HEIGHT = 62
 const INLINE_CONTROLS_RESERVED_WIDTH = 120
+const STARTER_PROMPT_KEY = 'ritual_onboarding_suggested_prompt'
+const DEFAULT_STARTER_PROMPTS = [
+  'Clean my Downloads folder and organize files by type.',
+  'Find why my Mac feels slow and tell me what to fix.',
+  'Open Gmail and draft a reply using the current webpage.',
+]
+
+function consumeOnboardingPrompt(): string {
+  try {
+    const prompt = localStorage.getItem(STARTER_PROMPT_KEY) || ''
+    if (prompt) localStorage.removeItem(STARTER_PROMPT_KEY)
+    return prompt
+  } catch {
+    return ''
+  }
+}
 
 type VoiceState = 'idle' | 'recording' | 'transcribing'
 
@@ -19,7 +35,8 @@ type VoiceState = 'idle' | 'recording' | 'transcribing'
  * It provides: textarea + mic/send buttons. Attachment chips render above when present.
  */
 export function InputBar() {
-  const [input, setInput] = useState('')
+  const [onboardingPrompt] = useState(consumeOnboardingPrompt)
+  const [input, setInput] = useState(onboardingPrompt)
   const [voiceState, setVoiceState] = useState<VoiceState>('idle')
   const [voiceError, setVoiceError] = useState<string | null>(null)
   const [slashFilter, setSlashFilter] = useState<string | null>(null)
@@ -325,7 +342,7 @@ export function InputBar() {
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm'
     const recorder = new MediaRecorder(stream, { mimeType })
     recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
-    
+
     const startingInput = inputRef.current.trim()
     let pollInterval: any;
 
@@ -345,7 +362,7 @@ export function InputBar() {
         else {
           const transcript = (result.transcript || (result as any).text || '').trim()
           const finalCombined = startingInput ? (transcript ? `${startingInput} ${transcript}` : startingInput) : transcript;
-          
+
           if (finalCombined) {
             if (autoSendOnReleaseRef.current) {
               setInput('')
@@ -367,7 +384,7 @@ export function InputBar() {
     recorder.onerror = () => { clearInterval(pollInterval); stream.getTracks().forEach((t) => t.stop()); setVoiceError('Recording failed.'); setVoiceState('idle') }
     mediaRecorderRef.current = recorder
     setVoiceState('recording')
-    
+
     recorder.start(500)
 
     pollInterval = setInterval(async () => {
@@ -385,7 +402,7 @@ export function InputBar() {
             }
           }
         }
-      } catch (e) {}
+      } catch (e) { }
     }, 1500)
   }, [sendMessage])
 
@@ -407,12 +424,12 @@ export function InputBar() {
       if (e.repeat) return
       if (isConnecting) return
       if (voiceState !== 'idle') return
-      
+
       // Ctrl hold must be the only modifier for push-to-talk.
       if (e.shiftKey || e.altKey || e.metaKey) return
-      
+
       pressedOtherKeysRef.current = false
-      
+
       debounceTimerRef.current = setTimeout(() => {
         if (!pressedOtherKeysRef.current) {
           autoSendOnReleaseRef.current = true
@@ -448,6 +465,26 @@ export function InputBar() {
   }, [isConnecting, voiceState, startRecording, stopRecording, cancelRecording])
 
   const hasAttachments = attachments.length > 0
+  const starterPrompts = useMemo(() => {
+    const prompts = onboardingPrompt
+      ? [onboardingPrompt, ...DEFAULT_STARTER_PROMPTS]
+      : DEFAULT_STARTER_PROMPTS
+    return Array.from(new Set(prompts)).slice(0, 3)
+  }, [onboardingPrompt])
+  const showStarterPrompts =
+    !hasAttachments &&
+    !input.trim() &&
+    !isBusy &&
+    voiceState === 'idle' &&
+    (tab?.messages.length ?? 0) === 0
+
+  const useStarterPrompt = (prompt: string) => {
+    setInput(prompt)
+    try {
+      localStorage.removeItem(STARTER_PROMPT_KEY)
+    } catch {}
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
 
   return (
     <div ref={wrapperRef} data-clui-ui className="flex flex-col w-full relative">
@@ -463,6 +500,28 @@ export function InputBar() {
           />
         )}
       </AnimatePresence>
+
+      {showStarterPrompts && (
+        <div className="flex items-center gap-1.5 overflow-hidden" style={{ paddingTop: 8, paddingBottom: 2 }}>
+          {starterPrompts.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => useStarterPrompt(prompt)}
+              className="max-w-[31%] truncate rounded-full px-3 py-1.5 text-[11px] font-medium transition-colors"
+              style={{
+                background: colors.accentLight,
+                color: colors.accent,
+                border: `1px solid ${colors.accentBorder}`,
+              }}
+              title={prompt}
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Attachment chips — renders inside the pill, above textarea */}
       {hasAttachments && (
@@ -490,7 +549,7 @@ export function InputBar() {
                       ? 'Transcribing...'
                       : isBusy
                         ? 'Type to queue a message...'
-                        : 'Ask Imprint anything...'
+                        : 'Ask Ritual anything...'
               }
               rows={1}
               className="w-full bg-transparent resize-none"
@@ -548,7 +607,7 @@ export function InputBar() {
                       ? 'Transcribing...'
                       : isBusy
                         ? 'Type to queue a message...'
-                        : 'Ask Imprint anything...'
+                        : 'Ask Ritual anything...'
               }
               rows={1}
               className="flex-1 bg-transparent resize-none"

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { DotsThree, Bell, ArrowsOutSimple, Moon, Key, PlugsConnected } from '@phosphor-icons/react'
+import { DotsThree, Bell, ArrowsOutSimple, Moon, Key, Sparkle } from '@phosphor-icons/react'
 import { ScopeSettings } from './ScopeSettings'
 import { useThemeStore } from '../theme'
 import { useSessionStore } from '../stores/sessionStore'
@@ -53,7 +53,6 @@ export function SettingsPopover() {
   const expandedUI = useThemeStore((s) => s.expandedUI)
   const setExpandedUI = useThemeStore((s) => s.setExpandedUI)
   const isExpanded = useSessionStore((s) => s.isExpanded)
-  const toggleConnectors = useSessionStore((s) => s.toggleConnectors)
   const popoverLayer = usePopoverLayer()
   const colors = useColors()
 
@@ -235,24 +234,22 @@ export function SettingsPopover() {
 
             <div style={{ height: 1, background: colors.popoverBorder }} />
 
-            {/* Connectors */}
+            {/* Onboarding */}
             <button
               type="button"
               onClick={() => {
                 setOpen(false)
-                toggleConnectors()
+                window.dispatchEvent(new Event('ritual:replay-onboarding'))
               }}
-              className="w-full flex items-center justify-between gap-3 rounded-lg px-0 py-0 text-left"
+              className="w-full flex items-center gap-2 rounded-lg text-left"
             >
-              <div className="flex items-center gap-2 min-w-0">
-                <PlugsConnected size={14} style={{ color: colors.textTertiary }} />
-                <div className="min-w-0">
-                  <div className="text-[12px] font-medium" style={{ color: colors.textPrimary }}>
-                    Connectors
-                  </div>
-                  <div className="text-[10px] leading-[1.45]" style={{ color: colors.textSecondary }}>
-                    Google Workspace and GitHub
-                  </div>
+              <Sparkle size={14} style={{ color: colors.textTertiary }} />
+              <div className="min-w-0">
+                <div className="text-[12px] font-medium" style={{ color: colors.textPrimary }}>
+                  Go through onboarding again
+                </div>
+                <div className="text-[10px] leading-[1.45]" style={{ color: colors.textSecondary }}>
+                  Revisit scope and example missions
                 </div>
               </div>
             </button>
