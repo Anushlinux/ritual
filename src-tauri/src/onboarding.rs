@@ -24,7 +24,7 @@ impl Default for OnboardingState {
 fn config_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".imprint")
+        .join(".ritual")
 }
 
 fn config_path() -> PathBuf {

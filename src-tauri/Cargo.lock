@@ -2166,34 +2166,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "imprint"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "base64 0.22.1",
- "chromiumoxide",
- "chrono",
- "dirs",
- "enigo",
- "futures",
- "image",
- "jsonwebtoken",
- "mime_guess",
- "reqwest 0.12.28",
- "rfd",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-opener",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
- "xcap",
-]
-
-[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3860,6 +3832,34 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "ritual"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "base64 0.22.1",
+ "chromiumoxide",
+ "chrono",
+ "dirs",
+ "enigo",
+ "futures",
+ "image",
+ "jsonwebtoken",
+ "mime_guess",
+ "reqwest 0.12.28",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-opener",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+ "xcap",
 ]
 
 [[package]]

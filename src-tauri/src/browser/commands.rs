@@ -77,11 +77,11 @@ pub async fn browser_setup_chrome() -> Result<String, String> {
         // Also write a launch script as a fallback
         let app_support = dirs::data_dir()
             .ok_or("Could not determine Application Support directory")?;
-        let imprint_dir = app_support.join("Imprint");
-        std::fs::create_dir_all(&imprint_dir)
-            .map_err(|e| format!("Failed to create Imprint directory: {}", e))?;
+        let ritual_dir = app_support.join("Ritual");
+        std::fs::create_dir_all(&ritual_dir)
+            .map_err(|e| format!("Failed to create Ritual directory: {}", e))?;
 
-        let script_path = imprint_dir.join("launch_chrome.sh");
+        let script_path = ritual_dir.join("launch_chrome.sh");
         std::fs::write(
             &script_path,
             "#!/bin/bash\n/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 \"$@\"\n",
@@ -102,11 +102,11 @@ pub async fn browser_setup_chrome() -> Result<String, String> {
         // On Windows, write a helper batch file that launches Chrome with the debug flag
         let app_data = std::env::var("APPDATA")
             .map_err(|_| "Could not determine APPDATA directory".to_string())?;
-        let imprint_dir = std::path::PathBuf::from(&app_data).join("Imprint");
-        std::fs::create_dir_all(&imprint_dir)
-            .map_err(|e| format!("Failed to create Imprint directory: {}", e))?;
+        let ritual_dir = std::path::PathBuf::from(&app_data).join("Ritual");
+        std::fs::create_dir_all(&ritual_dir)
+            .map_err(|e| format!("Failed to create Ritual directory: {}", e))?;
 
-        let script_path = imprint_dir.join("launch_chrome.bat");
+        let script_path = ritual_dir.join("launch_chrome.bat");
         std::fs::write(
             &script_path,
             "@echo off\r\nstart \"\" \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --remote-debugging-port=9222 %*\r\n",
@@ -124,11 +124,11 @@ pub async fn browser_setup_chrome() -> Result<String, String> {
         // Linux: write a desktop override or shell script
         let home = std::env::var("HOME")
             .map_err(|_| "Could not determine HOME directory".to_string())?;
-        let imprint_dir = std::path::PathBuf::from(&home).join(".local/share/Imprint");
-        std::fs::create_dir_all(&imprint_dir)
-            .map_err(|e| format!("Failed to create Imprint directory: {}", e))?;
+        let ritual_dir = std::path::PathBuf::from(&home).join(".local/share/Ritual");
+        std::fs::create_dir_all(&ritual_dir)
+            .map_err(|e| format!("Failed to create Ritual directory: {}", e))?;
 
-        let script_path = imprint_dir.join("launch_chrome.sh");
+        let script_path = ritual_dir.join("launch_chrome.sh");
         std::fs::write(
             &script_path,
             "#!/bin/bash\ngoogle-chrome --remote-debugging-port=9222 \"$@\"\n",

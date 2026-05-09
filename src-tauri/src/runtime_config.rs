@@ -109,7 +109,7 @@ pub fn save_user_runtime_config(api_key: String, model: Option<String>) -> Resul
         .map_err(|e| format!("Failed to create config directory {}: {}", parent.display(), e))?;
 
     let contents = format!(
-        "# Imprint local runtime config\nANTHROPIC_API_KEY={}\nANTHROPIC_MODEL={}\nANTHROPIC_VERSION={}\n",
+        "# Ritual local runtime config\nANTHROPIC_API_KEY={}\nANTHROPIC_MODEL={}\nANTHROPIC_VERSION={}\n",
         api_key, model, version
     );
     std::fs::write(&path, contents)
@@ -214,6 +214,6 @@ fn src_tauri_env_path() -> Option<PathBuf> {
 pub fn user_config_env_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join("imprint")
+        .join("ritual")
         .join(".env")
 }

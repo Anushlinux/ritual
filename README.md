@@ -30,7 +30,7 @@ Do not hardcode a private API key into a shared build. Desktop app secrets can b
 ## Install and Use a Release Build
 
 1. Download the latest build from the GitHub Releases page.
-2. Unzip it and move `imprint.app` to Applications.
+2. Open the downloaded DMG and move `Ritual.app` to Applications.
 3. Open the app.
 4. Click the settings dots, paste your Anthropic API key in **Claude API key**, and click **Save**.
 5. Try a simple prompt like `List the files in my current project folder.`
@@ -137,6 +137,18 @@ To create a production Tauri bundle:
 ```bash
 npm run tauri build
 ```
+
+To create a shareable macOS DMG, install a Developer ID Application certificate in your keychain, set the Apple notarization environment variables, then run:
+
+```bash
+APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+APPLE_ID="you@example.com" \
+APPLE_PASSWORD="app-specific-password" \
+APPLE_TEAM_ID="TEAMID" \
+npm run build:mac:release
+```
+
+The release script removes stale local bundle output first, builds an app and DMG, verifies the code signature, checks Gatekeeper assessment, and validates the stapled notarization ticket.
 
 ## Project Structure
 

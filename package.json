@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:mac:release": "node scripts/build-macos-release.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

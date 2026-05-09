@@ -119,7 +119,7 @@ fn encode_clipboard_image_to_attachment() -> Result<(AttachmentInfo, u64), Strin
         .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
         .map_err(|e| e.to_string())?;
 
-    let temp_path = std::env::temp_dir().join(format!("imprint-shot-{}.png", uuid::Uuid::new_v4()));
+    let temp_path = std::env::temp_dir().join(format!("ritual-shot-{}.png", uuid::Uuid::new_v4()));
     fs::write(&temp_path, &png).map_err(|e| e.to_string())?;
     let data_url = format!(
         "data:image/png;base64,{}",
@@ -145,7 +145,7 @@ pub fn take_screenshot_interactive() -> Result<Option<AttachmentInfo>, String> {
 
     // Reduce stale-image pickup risk when polling clipboard after capture UX.
     if let Ok(mut clipboard) = Clipboard::new() {
-        let _ = clipboard.set_text("imprint_screenshot_pending");
+        let _ = clipboard.set_text("ritual_screenshot_pending");
     }
 
     #[cfg(target_os = "windows")]

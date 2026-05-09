@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "imprint",
+  "productName": "Ritual",
   "version": "0.1.0",
-  "identifier": "com.bhaskarpandit.imprint",
+  "identifier": "com.bhaskarpandit.ritual",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Imprint",
+        "title": "Ritual",
         "width": 1200,
         "height": 920,
         "resizable": false,

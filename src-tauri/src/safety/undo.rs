@@ -89,7 +89,7 @@ impl UndoStack {
     fn storage_dir() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("~"))
-            .join(".imprint")
+            .join(".ritual")
             .join("undo")
     }
 

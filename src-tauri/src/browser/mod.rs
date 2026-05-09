@@ -103,7 +103,7 @@ impl BrowserManager {
 
         let profile_dir = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("~"))
-            .join(".imprint")
+            .join(".ritual")
             .join("chrome-profile");
             
         std::fs::create_dir_all(&profile_dir).map_err(|e| format!("Failed to create profile dir: {}", e))?;
@@ -149,7 +149,7 @@ impl BrowserManager {
 
     /// Connect to Chrome for automation.
     ///
-    /// Checks if port 9222 is open. If not, launches the browser using a dedicated Imprint profile.
+    /// Checks if port 9222 is open. If not, launches the browser using a dedicated Ritual profile.
     pub async fn connect() -> Result<Self, BrowserError> {
         // Fast path: port already open
         if Self::is_chrome_listening().await {

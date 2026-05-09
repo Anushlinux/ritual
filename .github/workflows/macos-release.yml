@@ -1,0 +1,82 @@
+name: macOS Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-macos:
+    name: Build ${{ matrix.name }} DMG
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: apple-silicon
+            target: aarch64-apple-darwin
+          - name: intel
+            target: x86_64-apple-darwin
+
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          CERT_ID="$(security find-identity -v -p codesigning build.keychain | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p' | head -n 1)"
+          if [ -z "$CERT_ID" ]; then
+            echo "Developer ID Application certificate was not found in the temporary keychain."
+            security find-identity -v -p codesigning build.keychain
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
+
+      - name: Build signed notarized DMG
+        run: npx tauri build --target "${{ matrix.target }}" --bundles app,dmg --ci
+
+      - name: Verify app signature
+        run: codesign --verify --deep --strict --verbose=4 src-tauri/target/${{ matrix.target }}/release/bundle/macos/Ritual.app
+
+      - name: Verify notarization ticket
+        run: |
+          xcrun stapler validate src-tauri/target/${{ matrix.target }}/release/bundle/macos/Ritual.app
+          find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -name '*.dmg' -print0 | xargs -0 -n1 xcrun stapler validate
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ritual-${{ matrix.name }}-dmg
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error

@@ -32,7 +32,7 @@ pub async fn dispatch_browser_tool(
     // Ensure we have a live connection
     BrowserManager::ensure_connected(state).await.map_err(|e| {
         format!(
-            "Browser connection failed: {}. Tell the user: 'Imprint uses an isolated secure Chrome profile. A new Chrome window will open. If you need to perform actions on a logged-in site like Telegram, please log in manually in that specific window first.'",
+            "Browser connection failed: {}. Tell the user: 'Ritual uses an isolated secure Chrome profile. A new Chrome window will open. If you need to perform actions on a logged-in site like Telegram, please log in manually in that specific window first.'",
             e
         )
     })?;
