@@ -121,12 +121,12 @@ function setInstalledPlugins(list: string[]) {
   localStorage.setItem(INSTALLED_PLUGINS_KEY, JSON.stringify(Array.from(new Set(list))));
 }
 
-function formatHistoryForGemini(messages: SessionMessage[]): any[] {
+function formatHistoryForOpenAI(messages: SessionMessage[]): any[] {
   return messages.map((m) => {
     if (m.role === 'user') {
-      return { role: 'user', parts: [{ text: m.content }] };
+      return { role: 'user', content: [{ type: 'input_text', text: m.content }] };
     } else if (m.role === 'assistant') {
-      return { role: 'model', parts: [{ text: m.content }] };
+      return { role: 'assistant', content: [{ type: 'output_text', text: m.content }] };
     }
     return null;
   }).filter(Boolean);
@@ -333,7 +333,7 @@ async function ensureListener() {
       type: 'session_init',
       sessionId,
       tools: connectorTools.map((tool: any) => tool.name),
-      model: 'gemini-3.1-pro-preview',
+      model: 'OpenAI',
       mcpServers: connectors.map((connector: any) => ({
         name: connector.name,
         status: connector.status,
@@ -344,26 +344,14 @@ async function ensureListener() {
     }));
     statusListeners.forEach(fn => fn(tabId, 'running', 'idle'));
 
-    const apiKey = localStorage.getItem('imprint_api_key') || "";
-    /*
-    if (!apiKey) {
-      errorListeners.forEach(fn => fn(tabId, {
-        message: "API Key is missing. Please enter it in the settings.",
-        stderrTail: [], exitCode: 1, elapsedMs: 0, toolCallCount: 0
-      }));
-      return;
-    }
-    */
-
     try {
       const all = loadSessions();
       const session = all[sessionId];
-      const history = session ? formatHistoryForGemini(session.messages) : [];
+      const history = session ? formatHistoryForOpenAI(session.messages) : [];
       
       await invoke('run_agent_command', { 
         prompt: opts.prompt, 
-        history, 
-        apiKey 
+        history
       });
     } catch (e) {
       errorListeners.forEach(fn => fn(tabId, {
@@ -585,6 +573,21 @@ async function ensureListener() {
       return {
         transcript: '',
         error: String(e),
+      };
+    }
+  },
+  getRuntimeConfigStatus: async () => {
+    try {
+      return await invoke<any>('get_runtime_config_status_command');
+    } catch (e) {
+      return {
+        provider: 'OpenAI',
+        model: 'unknown',
+        key_source: 'error',
+        key_fingerprint: String(e),
+        cwd: 'unknown',
+        executable_path: 'unknown',
+        src_tauri_env_found: false,
       };
     }
   },

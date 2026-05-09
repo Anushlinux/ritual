@@ -3,6 +3,7 @@ use crate::safety::plan::PlanApprovalState;
 use crate::safety::scope::ScopeGuard;
 use crate::safety::undo::{self, UndoStack};
 use crate::connectors::{self, ConnectorRegistry};
+use crate::runtime_config::{self, openai_model, read_runtime_env, read_runtime_secret};
 use crate::tools;
 use crate::types::AgentEvent;
 use crate::InterruptState;
@@ -59,34 +60,6 @@ struct ComputerUseAction {
     direction: Option<String>,
     amount: Option<i32>,
     reason: Option<String>,
-}
-
-fn read_runtime_env(name: &str) -> Option<String> {
-    if let Ok(v) = std::env::var(name) {
-        let trimmed = v.trim().to_string();
-        if !trimmed.is_empty() {
-            return Some(trimmed);
-        }
-    }
-
-    for path in [".env", "../.env"] {
-        if let Ok(contents) = std::fs::read_to_string(path) {
-            for line in contents.lines() {
-                let line = line.trim();
-                if line.starts_with('#') || !line.contains('=') {
-                    continue;
-                }
-                if let Some(rest) = line.strip_prefix(&format!("{}=", name)) {
-                    let value = rest.trim().trim_matches('"').trim_matches('\'');
-                    if !value.is_empty() {
-                        return Some(value.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    None
 }
 
 fn strip_markdown_fences(raw: &str) -> String {
@@ -724,6 +697,91 @@ fn build_tools_declaration(connector_tools: Vec<Value>) -> Value {
     json!([{ "functionDeclarations": function_declarations }])
 }
 
+fn normalize_schema_for_openai(value: Value) -> Value {
+    match value {
+        Value::Object(mut map) => {
+            if let Some(Value::String(kind)) = map.get_mut("type") {
+                *kind = kind.to_lowercase();
+            }
+            for item in map.values_mut() {
+                let normalized = normalize_schema_for_openai(item.take());
+                *item = normalized;
+            }
+            Value::Object(map)
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(normalize_schema_for_openai).collect()),
+        other => other,
+    }
+}
+
+fn build_openai_tools(connector_tools: Vec<Value>) -> Vec<Value> {
+    let declarations = build_tools_declaration(connector_tools);
+    declarations
+        .get(0)
+        .and_then(|group| group.get("functionDeclarations"))
+        .and_then(|items| items.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .map(|tool| {
+                    json!({
+                        "type": "function",
+                        "name": tool["name"].as_str().unwrap_or_default(),
+                        "description": tool["description"].as_str().unwrap_or_default(),
+                        "parameters": normalize_schema_for_openai(tool["parameters"].clone())
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn message_text_from_openai_output(output: &[Value]) -> String {
+    output
+        .iter()
+        .filter(|item| item["type"].as_str() == Some("message"))
+        .flat_map(|item| {
+            item["content"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .filter_map(|content| {
+            if content["type"].as_str() == Some("output_text") {
+                content["text"].as_str().map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn openai_function_calls(output: &[Value]) -> Vec<(String, String, Value)> {
+    output
+        .iter()
+        .filter(|item| item["type"].as_str() == Some("function_call"))
+        .map(|item| {
+            let call_id = item["call_id"].as_str().unwrap_or_default().to_string();
+            let name = item["name"].as_str().unwrap_or_default().to_string();
+            let args = item["arguments"]
+                .as_str()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .unwrap_or_else(|| json!({}));
+            (call_id, name, args)
+        })
+        .filter(|(call_id, name, _)| !call_id.is_empty() && !name.is_empty())
+        .collect()
+}
+
+fn openai_tool_output(call_id: &str, output: impl Into<String>) -> Value {
+    json!({
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": output.into()
+    })
+}
+
 pub async fn run_agent(
     prompt: String,
     history: Vec<Value>,
@@ -737,36 +795,28 @@ pub async fn run_agent(
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
 
-    // API key is baked into the binary at compile time via build.rs reading the .env file.
-    let api_key = env!("GEMINI_API_KEY");
-    if api_key.is_empty() {
-        return Err("GEMINI_API_KEY was not set at compile time. Add it to src-tauri/.env and rebuild.".to_string());
-    }
-
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={}",
-        api_key
-    );
+    let api_secret = read_runtime_secret("OPENAI_API_KEY")
+        .ok_or_else(|| "OPENAI_API_KEY is missing. Add it to src-tauri/.env, then restart the app.".to_string())?;
+    let api_key = api_secret.value;
+    let key_source = api_secret.source;
+    let key_fingerprint = runtime_config::key_fingerprint(&api_key);
+    let model = openai_model();
 
     let system_prompt = build_system_prompt();
-    let system_instruction = json!({
-        "parts": [{ "text": system_prompt }]
-    });
-
-    let tools = build_tools_declaration(connectors::connector_tools_as_gemini_declarations());
+    let tools = build_openai_tools(connectors::connector_tools_as_function_declarations());
     
-    let mut contents = history;
+    let mut input = history;
 
     // If history is empty, add the initial user prompt.
     // If it's not empty, the caller should have already appended the message to the session,
     // and clui-shim will pass it in.
-    if contents.is_empty() {
-        contents.push(json!({ "role": "user", "parts": [{ "text": prompt }] }));
+    if input.is_empty() {
+        input.push(json!({
+            "role": "user",
+            "content": [{ "type": "input_text", "text": prompt }]
+        }));
     } else {
-        // If clui-shim is passing history correctly, the last message in history
-        // is likely the current prompt. Let's verify or append as needed.
-        // For simplicity with clui-shim's current logic, we'll assume clui-shim 
-        // includes the current prompt in the history it sends.
+        // clui-shim includes the current prompt in the history it sends.
     }
     // Clear undo stack at start of each run so the undo button always targets THIS run
     undo_stack.clear();
@@ -827,31 +877,37 @@ pub async fn run_agent(
         }
 
         let body = json!({
-            "systemInstruction": system_instruction,
+            "model": model,
+            "instructions": system_prompt,
             "tools": tools,
-            "contents": contents,
-            "generationConfig": {
-                "thinkingConfig": {
-                    "includeThoughts": true
-                }
-            }
+            "input": input,
         });
 
         let response = client
-            .post(&url)
+            .post("https://api.openai.com/v1/responses")
+            .bearer_auth(&api_key)
             .json(&body)
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
+        let status = response.status();
         let data: Value = response.json().await.map_err(|e| e.to_string())?;
 
         // Check for API error
         if let Some(err) = data.get("error") {
-            let msg = err["message"]
+            let api_msg = err["message"]
                 .as_str()
-                .unwrap_or("Gemini API error")
+                .unwrap_or("OpenAI API error")
                 .to_string();
+            let msg = format!(
+                "OpenAI API error (status {}, model {}, key source {}, key fingerprint {}): {}",
+                status,
+                model,
+                key_source,
+                key_fingerprint,
+                api_msg
+            );
             window
                 .emit(
                     "agent_event",
@@ -867,57 +923,24 @@ pub async fn run_agent(
             return Err(msg);
         }
 
-        let parts = data["candidates"][0]["content"]["parts"]
+        let output = data["output"]
             .as_array()
             .cloned()
             .unwrap_or_default();
-
-        // Surface model thoughts to the UI when available.
-        let thought_text = parts
-            .iter()
-            .filter_map(|p| {
-                let is_thought = p
-                    .get("thought")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                if is_thought {
-                    p.get("text").and_then(|v| v.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !thought_text.trim().is_empty() {
-            window
-                .emit(
-                    "agent_event",
-                    AgentEvent {
-                        kind: "reasoning".into(),
-                        content: thought_text,
-                    },
-                )
-                .ok();
-        }
-
-        // Append model turn to contents
-        contents.push(json!({
-            "role": "model",
-            "parts": parts
-        }));
+        let function_calls = openai_function_calls(&output);
+        input.extend(output.clone());
 
         // Check if any part is a functionCall
-        let has_tool_calls = parts.iter().any(|p| p.get("functionCall").is_some());
+        let has_tool_calls = !function_calls.is_empty();
 
         if has_tool_calls {
             use std::hash::{Hash, Hasher};
             use std::collections::hash_map::DefaultHasher;
 
             let mut current_action_summary = String::new();
-            for part in &parts {
-                if let Some(fc) = part.get("functionCall") {
-                    current_action_summary.push_str(&fc.to_string());
-                }
+            for (_, name, args) in &function_calls {
+                current_action_summary.push_str(name);
+                current_action_summary.push_str(&args.to_string());
             }
             let mut hasher = DefaultHasher::new();
             current_action_summary.hash(&mut hasher);
@@ -942,57 +965,35 @@ pub async fn run_agent(
                     )
                     .ok();
                 
-                // Return tool result informing model of failure
-                contents.push(json!({
-                    "role": "user",
-                    "parts": [{
-                        "functionResponse": {
-                            "name": parts[0].get("functionCall").and_then(|fc| fc.get("name")).and_then(|n| n.as_str()).unwrap_or("unknown"),
-                            "response": { "output": msg }
-                        }
-                    }]
-                }));
+                for (call_id, _, _) in &function_calls {
+                    input.push(openai_tool_output(call_id, msg.clone()));
+                }
                 continue;
             }
 
             // Collect all function responses in one turn
             let mut function_responses: Vec<Value> = vec![];
+            let mut image_inputs: Vec<Value> = vec![];
 
-            for part in &parts {
-                if let Some(fc) = part.get("functionCall") {
-                    let name = fc["name"].as_str().unwrap_or("");
-                    let args = &fc["args"];
-
+            for (call_id, name, args) in &function_calls {
                     // Guardrail: avoid opening multiple file manager windows for a single request.
                     if name == "open_path" {
                         let requested = args["path"].as_str().unwrap_or("").trim().to_string();
                         if requested.is_empty() {
-                            function_responses.push(json!({
-                                "functionResponse": {
-                                    "name": name,
-                                    "response": { "output": "error: open_path requires a non-empty path" }
-                                }
-                            }));
+                            function_responses.push(openai_tool_output(call_id, "error: open_path requires a non-empty path"));
                             continue;
                         }
 
                         if opened_paths.contains(&requested) {
-                            function_responses.push(json!({
-                                "functionResponse": {
-                                    "name": name,
-                                    "response": { "output": format!("skipped: path already opened in this request ({})", requested) }
-                                }
-                            }));
+                            function_responses.push(openai_tool_output(
+                                call_id,
+                                format!("skipped: path already opened in this request ({})", requested),
+                            ));
                             continue;
                         }
 
                         if open_path_calls >= 1 {
-                            function_responses.push(json!({
-                                "functionResponse": {
-                                    "name": name,
-                                    "response": { "output": "skipped: open_path already used once in this request" }
-                                }
-                            }));
+                            function_responses.push(openai_tool_output(call_id, "skipped: open_path already used once in this request"));
                             continue;
                         }
 
@@ -1066,12 +1067,7 @@ pub async fn run_agent(
                                 },
                             )
                             .ok();
-                        function_responses.push(json!({
-                            "functionResponse": {
-                                "name": name,
-                                "response": { "output": format!("error: {}", block_msg) }
-                            }
-                        }));
+                        function_responses.push(openai_tool_output(call_id, format!("error: {}", block_msg)));
                         continue;
                     }
 
@@ -1144,14 +1140,9 @@ pub async fn run_agent(
                                         kind: "tool_result".into(),
                                         content: format!("CANCELLED: {}", reject_msg),
                                     },
-                                )
+                            )
                                 .ok();
-                            function_responses.push(json!({
-                                "functionResponse": {
-                                    "name": name,
-                                    "response": { "output": format!("error: {}", reject_msg) }
-                                }
-                            }));
+                            function_responses.push(openai_tool_output(call_id, format!("error: {}", reject_msg)));
                             continue;
                         }
                     }
@@ -1179,12 +1170,10 @@ pub async fn run_agent(
                                     },
                                 )
                                 .ok();
-                            function_responses.push(json!({
-                                "functionResponse": {
-                                    "name": name,
-                                    "response": { "output": "error: Do not use shell commands to open or kill Chrome. Call browser_navigate directly — it manages Chrome automatically." }
-                                }
-                            }));
+                            function_responses.push(openai_tool_output(
+                                call_id,
+                                "error: Do not use shell commands to open or kill Chrome. Call browser_navigate directly — it manages Chrome automatically.",
+                            ));
                             continue;
                         }
                     }
@@ -1266,63 +1255,45 @@ pub async fn run_agent(
                     if output_str.starts_with("SCREENSHOT_BASE64:") {
                         // Pure screenshot (e.g. screenshot tool, browser_screenshot)
                         let b64_data = &output_str["SCREENSHOT_BASE64:".len()..];
-                        function_responses.push(json!({
-                            "functionResponse": {
-                                "name": name,
-                                "response": {
-                                    "output": "Screenshot captured. Analyze the image to identify UI elements, their positions, and decide next actions."
-                                }
-                            }
-                        }));
-                        function_responses.push(json!({
-                            "inlineData": {
-                                "mimeType": "image/png",
-                                "data": b64_data
-                            }
+                        function_responses.push(openai_tool_output(
+                            call_id,
+                            "Screenshot captured. Analyze the image to identify UI elements, their positions, and decide next actions.",
+                        ));
+                        image_inputs.push(json!({
+                            "type": "input_image",
+                            "image_url": format!("data:image/png;base64,{}", b64_data)
                         }));
                     } else if let Some(idx) = output_str.find("\nSCREENSHOT_BASE64:") {
                         // Mixed output with embedded screenshot (e.g. browser_get_page_state)
                         let text_part = &output_str[..idx];
                         let b64_data = &output_str[idx + "\nSCREENSHOT_BASE64:".len()..];
-                        function_responses.push(json!({
-                            "functionResponse": {
-                                "name": name,
-                                "response": {
-                                    "output": text_part
-                                }
-                            }
-                        }));
-                        function_responses.push(json!({
-                            "inlineData": {
-                                "mimeType": "image/png",
-                                "data": b64_data
-                            }
+                        function_responses.push(openai_tool_output(call_id, text_part.to_string()));
+                        image_inputs.push(json!({
+                            "type": "input_image",
+                            "image_url": format!("data:image/png;base64,{}", b64_data)
                         }));
                     } else {
-                        function_responses.push(json!({
-                            "functionResponse": {
-                                "name": name,
-                                "response": { "output": output_str }
-                            }
-                        }));
+                        function_responses.push(openai_tool_output(call_id, output_str));
                     }
-                }
             }
 
-            // Append all tool results as a single user turn
-            contents.push(json!({
-                "role": "user",
-                "parts": function_responses
-            }));
+            input.extend(function_responses);
+            if !image_inputs.is_empty() {
+                let mut content = vec![json!({
+                    "type": "input_text",
+                    "text": "Image output from the previous tool call."
+                })];
+                content.extend(image_inputs);
+                input.push(json!({
+                    "role": "user",
+                    "content": content
+                }));
+            }
 
             // Continue loop
         } else {
             // No tool calls — extract final text and finish
-            let text = parts
-                .iter()
-                .filter_map(|p| p["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
+            let text = message_text_from_openai_output(&output);
 
             window
                 .emit(

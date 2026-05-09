@@ -1,6 +1,7 @@
 mod agent;
 pub mod browser;
 mod connectors;
+mod runtime_config;
 mod safety;
 mod tools;
 mod types;
@@ -13,6 +14,7 @@ use safety::scope::{ScopeConfig, ScopeGuard};
 use safety::undo::UndoStack;
 use safety::plan::PlanApprovalState;
 use connectors::ConnectorRegistry;
+use runtime_config::read_runtime_env;
 
 #[derive(serde::Deserialize)]
 struct GcpServiceAccountKey {
@@ -28,34 +30,6 @@ struct GcpJwtClaims {
     aud: String,
     exp: usize,
     iat: usize,
-}
-
-fn read_runtime_env(name: &str) -> Option<String> {
-    if let Ok(v) = std::env::var(name) {
-        let trimmed = v.trim().to_string();
-        if !trimmed.is_empty() {
-            return Some(trimmed);
-        }
-    }
-
-    for path in [".env", "../.env"] {
-        if let Ok(contents) = std::fs::read_to_string(path) {
-            for line in contents.lines() {
-                let line = line.trim();
-                if line.starts_with('#') || !line.contains('=') {
-                    continue;
-                }
-                if let Some(rest) = line.strip_prefix(&format!("{}=", name)) {
-                    let value = rest.trim().trim_matches('"').trim_matches('\'');
-                    if !value.is_empty() {
-                        return Some(value.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    None
 }
 
 fn load_gcp_service_key() -> Result<GcpServiceAccountKey, String> {
@@ -214,6 +188,11 @@ pub struct InterruptState(pub AtomicBool);
 async fn interrupt_agent(state: State<'_, InterruptState>) -> Result<(), String> {
     state.0.store(true, Ordering::SeqCst);
     Ok(())
+}
+
+#[tauri::command]
+async fn get_runtime_config_status_command() -> Result<runtime_config::RuntimeConfigStatus, String> {
+    Ok(runtime_config::runtime_config_status())
 }
 
 #[tauri::command]
@@ -444,6 +423,7 @@ pub fn run() {
         )
             .invoke_handler(tauri::generate_handler![
                 run_agent_command,
+                get_runtime_config_status_command,
                 interrupt_agent,
                 select_directory_command,
                 attach_files_command,

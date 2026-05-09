@@ -1,6 +1,6 @@
 import React, { useEffect, useCallback, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Paperclip, Camera, HeadCircuit, ClockCounterClockwise } from '@phosphor-icons/react'
+import { Paperclip, Camera, PlugsConnected, ClockCounterClockwise } from '@phosphor-icons/react'
 import { TabStrip } from './components/TabStrip'
 import { ConversationView } from './components/ConversationView'
 import { InputBar } from './components/InputBar'
@@ -12,8 +12,6 @@ import { useClaudeEvents } from './hooks/useClaudeEvents'
 import { useHealthReconciliation } from './hooks/useHealthReconciliation'
 import { useSessionStore } from './stores/sessionStore'
 import { useColors, useThemeStore, spacing } from './theme'
-import { useAgentStore } from './store/agent'
-import { ApiKeyGate } from './components/ApiKeyGate'
 import { PlanApprovalPanel } from './components/PlanApprovalPanel'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -184,17 +182,6 @@ export default function App() {
     }
   }, [])
   
-  const apiKey = useAgentStore((s) => s.apiKey)
-  if (!apiKey) {
-    return (
-      <div className="w-screen h-screen flex items-center justify-center bg-transparent" data-tauri-drag-region>
-        <div data-clui-ui className="w-[640px] bg-[#111111] rounded-2xl border border-white/[0.08] shadow-2xl flex flex-col overflow-hidden max-h-[500px]">
-          <ApiKeyGate />
-        </div>
-      </div>
-    )
-  }
-
   return (
     <PopoverLayerProvider>
       <div className="flex flex-col justify-end h-full" style={{ background: 'transparent' }}>
@@ -355,7 +342,7 @@ export default function App() {
                   onClick={() => useSessionStore.getState().toggleConnectors()}
                   disabled={isRunning}
                 >
-                  <HeadCircuit size={20} />
+                  <PlugsConnected size={20} />
                 </button>
                 {/* btn-4: Undo */}
                 <button

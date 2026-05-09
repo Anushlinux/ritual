@@ -127,6 +127,7 @@ export function ConnectorsPanel() {
   const connectors = useSessionStore((s) => s.connectors)
   const loading = useSessionStore((s) => s.connectorsLoading)
   const error = useSessionStore((s) => s.connectorsError)
+  const notice = useSessionStore((s) => s.connectorsNotice)
   const loadConnectors = useSessionStore((s) => s.loadConnectors)
 
   useEffect(() => {
@@ -165,6 +166,12 @@ export function ConnectorsPanel() {
       {error && (
         <div className="text-[11px] rounded-lg px-3 py-2 mb-3" style={{ color: colors.statusError, background: colors.statusErrorBg }}>
           {error}
+        </div>
+      )}
+
+      {notice && !error && (
+        <div className="text-[11px] rounded-lg px-3 py-2 mb-3" style={{ color: colors.textSecondary, background: colors.surfacePrimary, border: `1px solid ${colors.containerBorder}` }}>
+          {notice}
         </div>
       )}
 

@@ -81,6 +81,7 @@ interface State {
   connectorTools: ConnectorTool[]
   connectorsLoading: boolean
   connectorsError: string | null
+  connectorsNotice: string | null
 
   // Actions
   initStaticInfo: () => Promise<void>
@@ -193,6 +194,7 @@ export const useSessionStore = create<State>((set, get) => ({
   connectorTools: [],
   connectorsLoading: false,
   connectorsError: null,
+  connectorsNotice: null,
 
   initStaticInfo: async () => {
     try {
@@ -329,30 +331,33 @@ export const useSessionStore = create<State>((set, get) => ({
   },
 
   connectConnector: async (provider) => {
-    set({ connectorsLoading: true, connectorsError: null })
+    set({ connectorsLoading: true, connectorsError: null, connectorsNotice: null })
     try {
       const result = await window.clui.connectConnector(provider)
-      if (result.auth_url && result.status !== 'connected') {
-        await window.clui.openExternal(result.auth_url)
-      }
       await get().loadConnectors()
+      set({
+        connectorsNotice: result.message,
+      })
     } catch (err: unknown) {
       set({
         connectorsLoading: false,
         connectorsError: err instanceof Error ? err.message : String(err),
+        connectorsNotice: null,
       })
     }
   },
 
   disconnectConnector: async (provider) => {
-    set({ connectorsLoading: true, connectorsError: null })
+    set({ connectorsLoading: true, connectorsError: null, connectorsNotice: null })
     try {
       await window.clui.disconnectConnector(provider)
       await get().loadConnectors()
+      set({ connectorsNotice: `${provider} disconnected.` })
     } catch (err: unknown) {
       set({
         connectorsLoading: false,
         connectorsError: err instanceof Error ? err.message : String(err),
+        connectorsNotice: null,
       })
     }
   },

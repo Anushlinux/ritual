@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use crate::runtime_config::read_runtime_env;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -95,15 +96,17 @@ impl ConnectorRegistry {
         let message = match status {
             ConnectorStatus::Connected => format!("{} is connected.", provider_label(&normalized)),
             ConnectorStatus::Disconnected => {
-                if auth_url.is_some() {
-                    format!("Open the OAuth page to connect {}.", provider_label(&normalized))
+                let oauth_note = if auth_url.is_some() {
+                    " OAuth client settings were found, but the in-app OAuth callback is not implemented yet."
                 } else {
-                    format!(
-                        "Set {} or configure an OAuth client id to connect {}.",
-                        token_env_name(&normalized),
-                        provider_label(&normalized),
-                    )
-                }
+                    ""
+                };
+                format!(
+                    "Set {} in src-tauri/.env, then restart the app to connect {}.{}",
+                    token_env_name(&normalized),
+                    provider_label(&normalized),
+                    oauth_note,
+                )
             }
             ConnectorStatus::Error => format!("{} connector is misconfigured.", provider_label(&normalized)),
         };
@@ -146,7 +149,7 @@ impl ConnectorRegistry {
             Some("Ready for connector actions.".to_string())
         } else {
             Some(format!(
-                "Not connected. For local testing, set {} in the environment.",
+                "Not connected. Set {} in src-tauri/.env, then restart the app.",
                 token_env_name(provider)
             ))
         }
@@ -353,7 +356,7 @@ pub fn connector_tool_is_write(name: &str) -> bool {
     )
 }
 
-pub fn connector_tools_as_gemini_declarations() -> Vec<Value> {
+pub fn connector_tools_as_function_declarations() -> Vec<Value> {
     connector_tools()
         .into_iter()
         .map(|tool| json!({
@@ -573,34 +576,6 @@ fn truncate(input: &str, max_chars: usize) -> String {
     } else {
         input.chars().take(max_chars).collect::<String>() + "\n...truncated"
     }
-}
-
-fn read_runtime_env(name: &str) -> Option<String> {
-    if let Ok(v) = std::env::var(name) {
-        let trimmed = v.trim().to_string();
-        if !trimmed.is_empty() {
-            return Some(trimmed);
-        }
-    }
-
-    for path in [".env", "../.env", "src-tauri/.env"] {
-        if let Ok(contents) = std::fs::read_to_string(path) {
-            for line in contents.lines() {
-                let line = line.trim();
-                if line.starts_with('#') || !line.contains('=') {
-                    continue;
-                }
-                if let Some(rest) = line.strip_prefix(&format!("{}=", name)) {
-                    let value = rest.trim().trim_matches('"').trim_matches('\'');
-                    if !value.is_empty() {
-                        return Some(value.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    None
 }
 
 fn url_encode(input: &str) -> String {

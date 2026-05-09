@@ -226,6 +226,16 @@ export interface ConnectConnectorResult {
   message: string
 }
 
+export interface RuntimeConfigStatus {
+  provider: string
+  model: string
+  key_source: string
+  key_fingerprint: string
+  cwd: string
+  executable_path: string
+  src_tauri_env_found: boolean
+}
+
 // ─── Canonical Events (normalized from raw stream) ───
 
 export type NormalizedEvent =

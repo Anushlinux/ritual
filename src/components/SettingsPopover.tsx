@@ -1,12 +1,13 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { DotsThree, Bell, ArrowsOutSimple, Moon } from '@phosphor-icons/react'
+import { DotsThree, Bell, ArrowsOutSimple, Moon, Key, PlugsConnected } from '@phosphor-icons/react'
 import { ScopeSettings } from './ScopeSettings'
 import { useThemeStore } from '../theme'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
+import type { RuntimeConfigStatus } from '../types'
 
 function RowToggle({
   checked,
@@ -52,10 +53,12 @@ export function SettingsPopover() {
   const expandedUI = useThemeStore((s) => s.expandedUI)
   const setExpandedUI = useThemeStore((s) => s.setExpandedUI)
   const isExpanded = useSessionStore((s) => s.isExpanded)
+  const toggleConnectors = useSessionStore((s) => s.toggleConnectors)
   const popoverLayer = usePopoverLayer()
   const colors = useColors()
 
   const [open, setOpen] = useState(false)
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigStatus | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ right: number; top?: number; bottom?: number; maxHeight?: number }>({ right: 0 })
@@ -86,6 +89,13 @@ export function SettingsPopover() {
       maxHeight: undefined,
     })
   }, [isExpanded])
+
+  useEffect(() => {
+    if (!open) return
+    window.clui.getRuntimeConfigStatus?.()
+      .then((status: RuntimeConfigStatus) => setRuntimeConfig(status))
+      .catch(() => setRuntimeConfig(null))
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -220,6 +230,54 @@ export function SettingsPopover() {
                   colors={colors}
                   label="Toggle dark theme"
                 />
+              </div>
+            </div>
+
+            <div style={{ height: 1, background: colors.popoverBorder }} />
+
+            {/* Connectors */}
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                toggleConnectors()
+              }}
+              className="w-full flex items-center justify-between gap-3 rounded-lg px-0 py-0 text-left"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <PlugsConnected size={14} style={{ color: colors.textTertiary }} />
+                <div className="min-w-0">
+                  <div className="text-[12px] font-medium" style={{ color: colors.textPrimary }}>
+                    Connectors
+                  </div>
+                  <div className="text-[10px] leading-[1.45]" style={{ color: colors.textSecondary }}>
+                    Google Workspace and GitHub
+                  </div>
+                </div>
+              </div>
+            </button>
+
+            <div style={{ height: 1, background: colors.popoverBorder }} />
+
+            {/* Runtime config */}
+            <div>
+              <div className="flex items-start gap-2 min-w-0">
+                <Key size={14} style={{ color: colors.textTertiary, marginTop: 2 }} />
+                <div className="min-w-0">
+                  <div className="text-[12px] font-medium" style={{ color: colors.textPrimary }}>
+                    OpenAI runtime
+                  </div>
+                  <div className="text-[10px] leading-[1.45] mt-1" style={{ color: colors.textSecondary }}>
+                    {runtimeConfig
+                      ? `${runtimeConfig.model} · ${runtimeConfig.key_fingerprint}`
+                      : 'Loading...'}
+                  </div>
+                  {runtimeConfig && (
+                    <div className="text-[10px] leading-[1.45] truncate" style={{ color: colors.textTertiary }} title={runtimeConfig.key_source}>
+                      {runtimeConfig.key_source}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 

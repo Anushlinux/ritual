@@ -9,9 +9,6 @@ export interface AgentEvent {
 }
 
 interface AgentStore {
-  apiKey: string | null
-  setApiKey: (key: string) => void
-
   status: 'idle' | 'running' | 'done' | 'error'
   events: AgentEvent[]
   currentPrompt: string
@@ -20,21 +17,12 @@ interface AgentStore {
   reset: () => void
 }
 
-export const useAgentStore = create<AgentStore>((set, get) => ({
-  apiKey: localStorage.getItem('imprint_api_key'),
-  setApiKey: (key) => {
-    localStorage.setItem('imprint_api_key', key)
-    set({ apiKey: key })
-  },
-
+export const useAgentStore = create<AgentStore>((set) => ({
   status: 'idle',
   events: [],
   currentPrompt: '',
 
   runAgent: async (prompt) => {
-    const { apiKey } = get()
-    if (!apiKey) return
-
     set({ status: 'running', events: [], currentPrompt: prompt })
 
     let unlisten: UnlistenFn | null = null
@@ -53,7 +41,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     })
 
     try {
-      await invoke('run_agent_command', { prompt, apiKey })
+      await invoke('run_agent_command', { prompt, history: [] })
     } catch (err: any) {
       set((s) => ({
         status: 'error',
