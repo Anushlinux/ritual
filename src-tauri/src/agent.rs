@@ -186,7 +186,7 @@ async fn run_computer_use_loop(
     interrupt_state: &State<'_, InterruptState>,
 ) -> Result<String, String> {
     let api_secret = read_runtime_secret("ANTHROPIC_API_KEY").ok_or_else(|| {
-        "ANTHROPIC_API_KEY is missing. Add it to src-tauri/.env, then restart the app.".to_string()
+        "ANTHROPIC_API_KEY is missing. Open Settings and add your Claude API key, or add it to src-tauri/.env for development.".to_string()
     })?;
     let api_key = api_secret.value;
     let api_version = anthropic_version();
@@ -863,7 +863,7 @@ pub async fn run_agent(
     let client = reqwest::Client::new();
 
     let api_secret = read_runtime_secret("ANTHROPIC_API_KEY").ok_or_else(|| {
-        "ANTHROPIC_API_KEY is missing. Add it to src-tauri/.env, then restart the app.".to_string()
+        "ANTHROPIC_API_KEY is missing. Open Settings and add your Claude API key, or add it to src-tauri/.env for development.".to_string()
     })?;
     let api_key = api_secret.value;
     let key_source = api_secret.source;

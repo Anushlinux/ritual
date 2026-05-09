@@ -585,13 +585,25 @@ async function ensureListener() {
       return {
         provider: 'Claude',
         model: 'unknown',
+        has_api_key: false,
         key_source: 'error',
         key_fingerprint: String(e),
+        user_config_path: 'unknown',
+        user_config_found: false,
         cwd: 'unknown',
         executable_path: 'unknown',
         src_tauri_env_found: false,
       };
     }
+  },
+  saveRuntimeConfig: async (apiKey: string, model?: string) => {
+    return await invoke<any>('save_runtime_config_command', {
+      apiKey,
+      model: model || null,
+    });
+  },
+  clearRuntimeConfig: async () => {
+    return await invoke<any>('clear_runtime_config_command');
   },
 
   // ─── Connectors / MCP ───

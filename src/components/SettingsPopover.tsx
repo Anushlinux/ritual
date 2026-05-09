@@ -58,6 +58,10 @@ export function SettingsPopover() {
 
   const [open, setOpen] = useState(false)
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigStatus | null>(null)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [modelInput, setModelInput] = useState('claude-sonnet-4-5-20250929')
+  const [runtimeMessage, setRuntimeMessage] = useState('')
+  const [savingRuntime, setSavingRuntime] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ right: number; top?: number; bottom?: number; maxHeight?: number }>({ right: 0 })
@@ -89,12 +93,21 @@ export function SettingsPopover() {
     })
   }, [isExpanded])
 
-  useEffect(() => {
-    if (!open) return
-    window.clui.getRuntimeConfigStatus?.()
+  const refreshRuntimeConfig = useCallback(() => {
+    return window.clui.getRuntimeConfigStatus?.()
       .then((status: RuntimeConfigStatus) => setRuntimeConfig(status))
       .catch(() => setRuntimeConfig(null))
-  }, [open])
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    void refreshRuntimeConfig()
+  }, [open, refreshRuntimeConfig])
+
+  useEffect(() => {
+    if (!runtimeConfig?.model || runtimeConfig.model === 'unknown') return
+    setModelInput(runtimeConfig.model)
+  }, [runtimeConfig?.model])
 
   useEffect(() => {
     if (!open) return
@@ -135,6 +148,41 @@ export function SettingsPopover() {
     setOpen((o) => !o)
   }
 
+  const handleSaveRuntime = async () => {
+    const trimmedKey = apiKeyInput.trim()
+    if (!trimmedKey) {
+      setRuntimeMessage('Paste your Anthropic API key first.')
+      return
+    }
+    setSavingRuntime(true)
+    setRuntimeMessage('')
+    try {
+      const status = await window.clui.saveRuntimeConfig(trimmedKey, modelInput.trim())
+      setRuntimeConfig(status)
+      setApiKeyInput('')
+      setRuntimeMessage('Saved. Claude is ready.')
+    } catch (e) {
+      setRuntimeMessage(String(e))
+    } finally {
+      setSavingRuntime(false)
+    }
+  }
+
+  const handleClearRuntime = async () => {
+    setSavingRuntime(true)
+    setRuntimeMessage('')
+    try {
+      const status = await window.clui.clearRuntimeConfig()
+      setRuntimeConfig(status)
+      setApiKeyInput('')
+      setRuntimeMessage(status.has_api_key ? 'Saved key cleared. Another runtime key is still active.' : 'Saved key cleared.')
+    } catch (e) {
+      setRuntimeMessage(String(e))
+    } finally {
+      setSavingRuntime(false)
+    }
+  }
+
   return (
     <>
       <button
@@ -161,7 +209,7 @@ export function SettingsPopover() {
             ...(pos.top != null ? { top: pos.top } : {}),
             ...(pos.bottom != null ? { bottom: pos.bottom } : {}),
             right: pos.right,
-            width: 240,
+            width: 300,
             pointerEvents: 'auto',
             background: colors.popoverBg,
             backdropFilter: 'blur(20px)',
@@ -260,9 +308,17 @@ export function SettingsPopover() {
             <div>
               <div className="flex items-start gap-2 min-w-0">
                 <Key size={14} style={{ color: colors.textTertiary, marginTop: 2 }} />
-                <div className="min-w-0">
-                  <div className="text-[12px] font-medium" style={{ color: colors.textPrimary }}>
-                    Claude runtime
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[12px] font-medium" style={{ color: colors.textPrimary }}>
+                      Claude API key
+                    </div>
+                    <div
+                      className="text-[10px] font-medium"
+                      style={{ color: runtimeConfig?.has_api_key ? colors.statusComplete : colors.statusError }}
+                    >
+                      {runtimeConfig?.has_api_key ? 'Ready' : 'Missing'}
+                    </div>
                   </div>
                   <div className="text-[10px] leading-[1.45] mt-1" style={{ color: colors.textSecondary }}>
                     {runtimeConfig
@@ -272,6 +328,63 @@ export function SettingsPopover() {
                   {runtimeConfig && (
                     <div className="text-[10px] leading-[1.45] truncate" style={{ color: colors.textTertiary }} title={runtimeConfig.key_source}>
                       {runtimeConfig.key_source}
+                    </div>
+                  )}
+                  <input
+                    type="password"
+                    value={apiKeyInput}
+                    onChange={(event) => setApiKeyInput(event.currentTarget.value)}
+                    placeholder="sk-ant-..."
+                    className="mt-2 w-full rounded-md px-2 py-1.5 text-[11px] outline-none"
+                    style={{
+                      color: colors.textPrimary,
+                      background: colors.surfaceSecondary,
+                      border: `1px solid ${colors.containerBorder}`,
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={modelInput}
+                    onChange={(event) => setModelInput(event.currentTarget.value)}
+                    className="mt-1.5 w-full rounded-md px-2 py-1.5 text-[11px] outline-none"
+                    style={{
+                      color: colors.textPrimary,
+                      background: colors.surfaceSecondary,
+                      border: `1px solid ${colors.containerBorder}`,
+                    }}
+                  />
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleSaveRuntime}
+                      disabled={savingRuntime}
+                      className="rounded-md px-2 py-1 text-[11px] font-medium"
+                      style={{
+                        color: '#fff',
+                        background: colors.accent,
+                        opacity: savingRuntime ? 0.7 : 1,
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearRuntime}
+                      disabled={savingRuntime || !runtimeConfig?.user_config_found}
+                      className="rounded-md px-2 py-1 text-[11px]"
+                      style={{
+                        color: colors.textSecondary,
+                        background: colors.surfaceSecondary,
+                        border: `1px solid ${colors.containerBorder}`,
+                        opacity: savingRuntime || !runtimeConfig?.user_config_found ? 0.5 : 1,
+                      }}
+                    >
+                      Clear saved key
+                    </button>
+                  </div>
+                  {runtimeMessage && (
+                    <div className="text-[10px] leading-[1.4] mt-1.5" style={{ color: colors.textSecondary }}>
+                      {runtimeMessage}
                     </div>
                   )}
                 </div>

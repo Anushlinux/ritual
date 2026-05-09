@@ -15,7 +15,7 @@ Clone https://github.com/Anushlinux/ritual repository into my current directory.
 
 Then read the README.md and AGENTS.md. I want to get Ritual running locally on my computer with my own Anthropic API key.
 
-Help me install the required tools, create the src-tauri/.env file, add my ANTHROPIC_API_KEY, run the app, and fix any setup errors you see.
+Help me install the required tools, run the app, add my Anthropic API key in Settings, and fix any setup errors you see.
 Walk me through it step by step.
 ```
 
@@ -27,7 +27,17 @@ This app does **not** include anyone else's Claude API key. If someone sends you
 
 Do not hardcode a private API key into a shared build. Desktop app secrets can be extracted. If you want a one-click public app where users do not add a key, run your own backend proxy and keep the API key on the server.
 
-## Manual Setup
+## Install and Use a Release Build
+
+1. Download the latest build from the GitHub Releases page.
+2. Unzip it and move `imprint.app` to Applications.
+3. Open the app.
+4. Click the settings dots, paste your Anthropic API key in **Claude API key**, and click **Save**.
+5. Try a simple prompt like `List the files in my current project folder.`
+
+The saved key lives only on your computer in the app config folder. It is not committed to the repo and is not included in shared builds.
+
+## Manual Developer Setup
 
 ### Prerequisites
 
@@ -44,7 +54,19 @@ For macOS desktop control features, you may also need to allow Accessibility, Sc
 npm install
 ```
 
-### 2. Add Your Claude API Key
+### 2. Run the Desktop App
+
+```bash
+npm run tauri dev
+```
+
+This starts the Vite frontend and the Tauri desktop shell.
+
+### 3. Add Your Claude API Key
+
+The easiest path is inside the app: open Settings, paste your Anthropic API key in **Claude API key**, and click **Save**.
+
+For development, you can also use an env file instead:
 
 Copy the example env file:
 
@@ -60,14 +82,6 @@ ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 ```
 
 `ANTHROPIC_MODEL` is optional. The default is Claude Sonnet 4.5.
-
-### 3. Run the Desktop App
-
-```bash
-npm run tauri dev
-```
-
-This starts the Vite frontend and the Tauri desktop shell.
 
 ### 4. Try a Simple Prompt
 
@@ -133,7 +147,7 @@ npm run tauri build
 
 ## Troubleshooting
 
-If the app says `ANTHROPIC_API_KEY is missing`, check that `src-tauri/.env` exists and contains your key.
+If the app says `ANTHROPIC_API_KEY is missing`, open Settings, paste your Anthropic API key under **Claude API key**, and click **Save**. Developers can also check that `src-tauri/.env` exists and contains the key.
 
 If desktop control does not work on macOS, open System Settings and grant the requested permissions for the app or terminal you launched it from.
 

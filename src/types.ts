@@ -229,8 +229,11 @@ export interface ConnectConnectorResult {
 export interface RuntimeConfigStatus {
   provider: string
   model: string
+  has_api_key: boolean
   key_source: string
   key_fingerprint: string
+  user_config_path: string
+  user_config_found: boolean
   cwd: string
   executable_path: string
   src_tauri_env_found: boolean

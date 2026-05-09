@@ -16,8 +16,11 @@ pub struct RuntimeSecret {
 pub struct RuntimeConfigStatus {
     pub provider: String,
     pub model: String,
+    pub has_api_key: bool,
     pub key_source: String,
     pub key_fingerprint: String,
+    pub user_config_path: String,
+    pub user_config_found: bool,
     pub cwd: String,
     pub executable_path: String,
     pub src_tauri_env_found: bool,
@@ -60,9 +63,11 @@ pub fn anthropic_version() -> String {
 
 pub fn runtime_config_status() -> RuntimeConfigStatus {
     let anthropic = read_runtime_secret("ANTHROPIC_API_KEY");
+    let user_config_path = user_config_env_path();
     RuntimeConfigStatus {
         provider: "Claude".to_string(),
         model: anthropic_model(),
+        has_api_key: anthropic.is_some(),
         key_source: anthropic
             .as_ref()
             .map(|s| s.source.clone())
@@ -71,6 +76,8 @@ pub fn runtime_config_status() -> RuntimeConfigStatus {
             .as_ref()
             .map(|s| key_fingerprint(&s.value))
             .unwrap_or_else(|| "missing".to_string()),
+        user_config_path: user_config_path.display().to_string(),
+        user_config_found: user_config_path.exists(),
         cwd: std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "unknown".to_string()),
@@ -81,10 +88,63 @@ pub fn runtime_config_status() -> RuntimeConfigStatus {
     }
 }
 
+pub fn save_user_runtime_config(api_key: String, model: Option<String>) -> Result<RuntimeConfigStatus, String> {
+    let api_key = clean_single_line_secret("ANTHROPIC_API_KEY", &api_key)?;
+    if api_key.is_empty() {
+        return Err("ANTHROPIC_API_KEY cannot be empty.".to_string());
+    }
+
+    let model = model
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string());
+    let model = clean_single_line_secret("ANTHROPIC_MODEL", &model)?;
+    let version = DEFAULT_ANTHROPIC_VERSION;
+
+    let path = user_config_env_path();
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Invalid config path: {}", path.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create config directory {}: {}", parent.display(), e))?;
+
+    let contents = format!(
+        "# Imprint local runtime config\nANTHROPIC_API_KEY={}\nANTHROPIC_MODEL={}\nANTHROPIC_VERSION={}\n",
+        api_key, model, version
+    );
+    std::fs::write(&path, contents)
+        .map_err(|e| format!("Failed to write runtime config {}: {}", path.display(), e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(runtime_config_status())
+}
+
+pub fn clear_user_runtime_config() -> Result<RuntimeConfigStatus, String> {
+    let path = user_config_env_path();
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Failed to remove runtime config {}: {}", path.display(), e))?;
+    }
+    Ok(runtime_config_status())
+}
+
 pub fn key_fingerprint(secret: &str) -> String {
     let mut hasher = DefaultHasher::new();
     secret.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn clean_single_line_secret(name: &str, value: &str) -> Result<String, String> {
+    let trimmed = value.trim().trim_matches('"').trim_matches('\'').to_string();
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        return Err(format!("{} must be a single line.", name));
+    }
+    Ok(trimmed)
 }
 
 fn read_env_file_value(path: &PathBuf, name: &str) -> Option<String> {
@@ -106,6 +166,8 @@ fn read_env_file_value(path: &PathBuf, name: &str) -> Option<String> {
 
 fn env_candidate_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
+
+    paths.push(user_config_env_path());
 
     if let Ok(cwd) = std::env::current_dir() {
         paths.push(cwd.join(".env"));
@@ -147,4 +209,11 @@ fn src_tauri_env_path() -> Option<PathBuf> {
     env_candidate_paths()
         .into_iter()
         .find(|p| p.ends_with("src-tauri/.env"))
+}
+
+pub fn user_config_env_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join("imprint")
+        .join(".env")
 }

@@ -197,6 +197,19 @@ async fn get_runtime_config_status_command() -> Result<runtime_config::RuntimeCo
 }
 
 #[tauri::command]
+async fn save_runtime_config_command(
+    api_key: String,
+    model: Option<String>,
+) -> Result<runtime_config::RuntimeConfigStatus, String> {
+    runtime_config::save_user_runtime_config(api_key, model)
+}
+
+#[tauri::command]
+async fn clear_runtime_config_command() -> Result<runtime_config::RuntimeConfigStatus, String> {
+    runtime_config::clear_user_runtime_config()
+}
+
+#[tauri::command]
 async fn get_onboarding_state() -> Result<onboarding::OnboardingState, String> {
     Ok(onboarding::get_state())
 }
@@ -442,6 +455,8 @@ pub fn run() {
             .invoke_handler(tauri::generate_handler![
                 run_agent_command,
                 get_runtime_config_status_command,
+                save_runtime_config_command,
+                clear_runtime_config_command,
                 get_onboarding_state,
                 complete_onboarding,
                 reset_onboarding,
