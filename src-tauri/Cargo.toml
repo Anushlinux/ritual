@@ -1,6 +1,6 @@
 [package]
 name = "ritual"
-version = "0.1.0"
+version = "0.1.2"
 description = "Ritual desktop automation app"
 authors = ["Bhaskar Pandit"]
 edition = "2021"

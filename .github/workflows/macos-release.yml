@@ -6,6 +6,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-macos:
     name: Build ${{ matrix.name }} DMG
@@ -74,9 +77,24 @@ jobs:
           xcrun stapler validate src-tauri/target/${{ matrix.target }}/release/bundle/macos/Ritual.app
           find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -name '*.dmg' -print0 | xargs -0 -n1 xcrun stapler validate
 
-      - name: Upload DMG
-        uses: actions/upload-artifact@v4
+      - name: Prepare release asset
+        run: |
+          mkdir -p release
+          DMG_PATH="$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -name '*.dmg' -print -quit)"
+          if [ -z "$DMG_PATH" ]; then
+            echo "No DMG was produced."
+            exit 1
+          fi
+          cp "$DMG_PATH" "release/Ritual-${{ github.ref_name }}-${{ matrix.name }}.dmg"
+
+      - name: Upload DMG to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: Ritual-${{ matrix.name }}-dmg
-          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-          if-no-files-found: error
+          name: Ritual ${{ github.ref_name }}
+          make_latest: true
+          body: |
+            Signed and notarized Ritual macOS release.
+
+            Download the DMG for your Mac architecture and drag Ritual.app to Applications.
+            The automatically generated Source code ZIP is not the app installer.
+          files: release/*.dmg
