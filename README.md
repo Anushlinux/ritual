@@ -1,6 +1,6 @@
-# Imprint
+# Ritual
 
-Imprint is a local desktop automation app built with Tauri, React, TypeScript, and Rust. It uses Claude through the Anthropic API to understand your requests, call local tools, and help operate your computer.
+Ritual is a local desktop automation app built with Tauri, React, TypeScript, and Rust. It uses Claude through the Anthropic API to understand your requests, call local tools, and help operate your computer.
 
 ## Get Started With Claude Code
 
