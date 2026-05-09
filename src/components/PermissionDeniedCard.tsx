@@ -1,4 +1,3 @@
-import React from 'react'
 import { motion } from 'framer-motion'
 import { ShieldWarning, Terminal, ArrowSquareOut } from '@phosphor-icons/react'
 import { useColors } from '../theme'

@@ -3,6 +3,12 @@ import { useSessionStore } from '../stores/sessionStore'
 
 const HEALTH_POLL_INTERVAL_MS = 1500
 
+interface TabHealthEntry {
+  tabId: string
+  status: 'idle' | 'running' | 'connecting' | 'completed' | 'failed' | 'dead'
+  alive?: boolean
+}
+
 /**
  * Health reconciliation loop: periodically compares running tabs
  * against backend health and unsticks UI when external CLI/session
@@ -23,8 +29,8 @@ export function useHealthReconciliation() {
         const health = await window.clui.tabHealth()
         if (!health?.tabs || !Array.isArray(health.tabs)) return
 
-        const stateByTab = new Map(
-          health.tabs.map((h) => [h.tabId, h])
+        const stateByTab = new Map<string, TabHealthEntry>(
+          health.tabs.map((h: TabHealthEntry) => [h.tabId, h])
         )
 
         // Build updated tabs, tracking whether anything actually changed

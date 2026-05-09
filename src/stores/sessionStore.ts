@@ -376,7 +376,7 @@ export const useSessionStore = create<State>((set, get) => ({
         set({ marketplaceError: catalog.error, marketplaceLoading: false })
         return
       }
-      const installedSet = new Set(installed.map((n) => n.toLowerCase()))
+      const installedSet = new Set(installed.map((n: string) => n.toLowerCase()))
       const pluginStates: Record<string, PluginStatus> = {}
       for (const p of catalog.plugins) {
         // For SKILL.md skills: match individual name against ~/.claude/skills/ dirs
@@ -482,7 +482,7 @@ export const useSessionStore = create<State>((set, get) => ({
 
       // Load previous conversation messages from the JSONL file
       const history = await window.clui.loadSession(sessionId, defaultDir).catch(() => [])
-      const messages: Message[] = history.map((m) => ({
+      const messages: Message[] = history.map((m: Message) => ({
         id: nextMsgId(),
         role: m.role as Message['role'],
         content: m.content,

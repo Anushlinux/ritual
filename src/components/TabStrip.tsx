@@ -1,4 +1,3 @@
-import React from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, X, DotsSixVertical } from '@phosphor-icons/react'
 import { useSessionStore } from '../stores/sessionStore'

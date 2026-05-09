@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useSessionStore } from '../stores/sessionStore'
-import type { NormalizedEvent } from '../types'
+import type { EnrichedError, NormalizedEvent } from '../types'
 
 /**
  * Subscribes to all ControlPlane events via IPC and routes them
@@ -31,7 +31,7 @@ export function useClaudeEvents() {
       buffer.clear()
     }
 
-    const unsubEvent = window.clui.onEvent((tabId, event) => {
+    const unsubEvent = window.clui.onEvent((tabId: string, event: NormalizedEvent) => {
       if (event.type === 'text_chunk') {
         // Buffer text chunks and flush on next animation frame
         const buffer = chunkBufferRef.current
@@ -59,15 +59,15 @@ export function useClaudeEvents() {
       }
     })
 
-    const unsubStatus = window.clui.onTabStatusChange((tabId, newStatus, oldStatus) => {
+    const unsubStatus = window.clui.onTabStatusChange((tabId: string, newStatus: string, oldStatus: string) => {
       handleStatusChange(tabId, newStatus, oldStatus)
     })
 
-    const unsubError = window.clui.onError((tabId, error) => {
+    const unsubError = window.clui.onError((tabId: string, error: EnrichedError) => {
       handleError(tabId, error)
     })
 
-    const unsubSkill = window.clui.onSkillStatus((status) => {
+    const unsubSkill = window.clui.onSkillStatus((status: { state: string; name: string; error?: string }) => {
       if (status.state === 'failed') {
         console.warn(`[CLUI] Skill install failed: ${status.name} — ${status.error}`)
       }
